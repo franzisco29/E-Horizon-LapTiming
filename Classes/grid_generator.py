@@ -5,13 +5,48 @@ from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional
 
-from Classes.grid_driver import GridDriver
+from dataclasses import dataclass
+
+from PySide6.QtWidgets import QFileDialog, QWidget
 
 # PDF (ReportLab)
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.colors import Color, black, dimgray, white
 from reportlab.pdfgen import canvas
+
+
+
+
+def clone_clean(d: GridDriver) -> GridDriver:
+    # copia senza penalità e senza stati derivati
+    return replace(
+        d,
+        grid_drop=0,
+        desired_pos_after_penalty=0,
+        pit_lane_start=False,
+    )
+
+
+@dataclass
+class GridDriver:
+    name: str
+    surname: str
+    race_number: int
+    team: str
+    position: int
+    best_lap: str
+
+    grid_drop: int = 0
+    desired_pos_after_penalty: int = 0
+    pit_lane_start: bool = False
+
+    base_position: int = 0   # ✅ nuovo
+
+    def name_surname(self) -> str:
+        initials = " ".join([f"{p[0]}." for p in self.name.split() if p])
+        return f"{initials} {self.surname}  | #{self.race_number}"
+
 
 
 class GridGenerator:
@@ -48,6 +83,50 @@ class GridGenerator:
     # ----------------------------
     # JSON -> Driver list
     # ----------------------------
+    
+    def load_starting_grid_for_view(
+        self,
+        root_path: str | Path,
+        parent: QWidget | None = None,
+    ) -> Optional[List[GridDriver]]:
+        """
+        VB LoadStartingGridForView():
+        - chiede 2 json in root/RAW
+        - se annulli -> None
+        - poi build_final_grid(base, final) e ritorna lista ordinata per position
+        """
+        raw_path = Path(root_path) / "RAW"
+        raw_path.mkdir(parents=True, exist_ok=True)
+
+        # 1) Qualifica (base)
+        base_json, _ = QFileDialog.getOpenFileName(
+            parent,
+            "Seleziona JSON - Sessione di Qualifica",
+            str(raw_path),
+            "JSON files (*.json)",
+        )
+        if not base_json:
+            return None
+
+        # 2) HyperPole (top 4)
+        final_json, _ = QFileDialog.getOpenFileName(
+            parent,
+            "Seleziona JSON - Sessione HyperPole (Top 4)",
+            str(raw_path),
+            "JSON files (*.json)",
+        )
+        if not final_json:
+            return None
+
+        base_drivers = self.load_drivers_from_json(base_json)
+        final_drivers = self.load_drivers_from_json(final_json)
+
+        grid = self.build_final_grid(base_drivers, final_drivers)
+        grid = sorted(grid, key=lambda d: d.position)
+
+        return grid
+    
+    
     @staticmethod
     def load_drivers_from_json(path: str | Path) -> List[GridDriver]:
         path = Path(path)
@@ -61,8 +140,9 @@ class GridGenerator:
                     surname=str(d.get("surname", "")),
                     race_number=int(d.get("number", 0)),
                     team=str(d.get("team", "")),
-                    position=int(d.get("position", 0)),
+                    base_position=int(d.get("position", 0)),
                     best_lap=str(d.get("bestLap", "")),
+                    position=int(d.get("position", 0)),
                 )
             )
 
@@ -93,61 +173,68 @@ class GridGenerator:
     # Apply grid penalties
     # ----------------------------
     @staticmethod
-    def apply_penalties_and_pit_lane(grid: List[GridDriver]) -> List[GridDriver]:
-        ordered = sorted(grid, key=lambda d: d.position)
+    def apply_penalties_and_pit_lane(grid: list[GridDriver]) -> list[GridDriver]:
+        ordered = sorted(grid, key=lambda d: d.base_position or d.position)
         grid_count = len(ordered)
 
-        # desired + pit
         for d in ordered:
-            desired = d.position + max(0, d.grid_drop)
+            desired = (d.base_position or d.position) + max(0, int(d.grid_drop))
             d.desired_pos_after_penalty = desired
             d.pit_lane_start = desired > grid_count
 
-        # GRID only
-        grid_only = sorted(
-            [d for d in ordered if not d.pit_lane_start],
-            key=lambda d: (d.desired_pos_after_penalty, d.position),
-        )
-        for i, d in enumerate(grid_only):
-            d.position = i + 1
+        grid_only = [d for d in ordered if not d.pit_lane_start]
+        pit_only  = [d for d in ordered if d.pit_lane_start]
 
-        # PIT only
-        pit_only = sorted(
-            [d for d in ordered if d.pit_lane_start],
-            key=lambda d: (d.desired_pos_after_penalty, d.position),
-        )
+        # ✅ tie-break: non penalizzati prima, penalizzati dopo
+        grid_only.sort(key=lambda d: (
+            d.desired_pos_after_penalty,
+            1 if d.grid_drop > 0 else 0,     # penalizzati dopo
+            d.base_position or d.position,   # stabilità
+        ))
+
+        for i, d in enumerate(grid_only, start=1):
+            d.position = i
+
+        # PIT: se vuoi stesso criterio, usa base_position come tie-break
+        pit_only.sort(key=lambda d: (
+            d.desired_pos_after_penalty,
+            d.base_position or d.position,
+        ))
 
         return grid_only + pit_only
-
+        
     # ----------------------------
     # PDF generation (3 pages)
     # ----------------------------
     def generate_pdf(
         self,
-        grid: List[GridDriver],
+        final_grid_with_penalties: list[GridDriver],
         output_path: str | Path,
-        endurance_grid: List[GridDriver],
+        endurance_grid_base: list[GridDriver],
         logo_path: Optional[str | Path] = None,
     ) -> None:
         output_path = Path(output_path)
         c = canvas.Canvas(str(output_path), pagesize=A4)
 
-        # Page 1: final grid
-        self._render_grid_page(c, grid, "FINAL STARTING GRID", endurance=False, logo_path=logo_path)
+        # PAGE 1: FINAL (penalità OK)
+        self._render_grid_page(c, final_grid_with_penalties, "FINAL STARTING GRID", endurance=False, logo_path=logo_path)
         c.showPage()
 
-        # Page 2: sprint grid (inversa)
-        sprint_grid = [
-            replace(d, position=i + 1)
-            for i, d in enumerate(sorted(grid, key=lambda x: x.position, reverse=True))
-        ]
+        # PAGE 2: SPRINT (NON deve usare penalità)
+        sprint_base = [clone_clean(d) for d in final_grid_with_penalties]  # pulita
+        sprint_sorted = sorted(sprint_base, key=lambda x: x.base_position or x.position, reverse=True)
+        sprint_grid = [replace(d, position=i + 1) for i, d in enumerate(sprint_sorted)]
+
         self._render_grid_page(c, sprint_grid, "SPRINT STARTING GRID", endurance=False, logo_path=logo_path)
         c.showPage()
 
-        # Page 3: endurance grid
-        self._render_grid_page(c, endurance_grid, "ENDURANCE FINAL GRID", endurance=True, logo_path=logo_path)
-        c.save()
+        # PAGE 3: ENDURANCE (NON deve usare penalità)
+        endurance_clean = [clone_clean(d) for d in endurance_grid_base]
+        endurance_clean = sorted(endurance_clean, key=lambda x: x.base_position or x.position)
+        endurance_clean = [replace(d, position=i + 1) for i, d in enumerate(endurance_clean)]
 
+        self._render_grid_page(c, endurance_clean, "ENDURANCE FINAL GRID", endurance=True, logo_path=logo_path)
+        c.save()
     # ----------------------------
     # Rendering helpers
     # ----------------------------

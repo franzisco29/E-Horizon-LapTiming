@@ -20,10 +20,10 @@ def fmt_mm_ss_mmm(t: timedelta) -> str:
 def fmt_ss_mmm(t: timedelta) -> str:
     """Formato 'ss.fff' (VB: ss\\.fff)."""
     if t is None:
-        return "  "
+        return "00.000"
     total_ms = int(t.total_seconds() * 1000)
     if total_ms <= 0:
-        return " "
+        return "00.000"
     ms = total_ms % 1000
     total_s = total_ms // 1000
     s = total_s % 60

@@ -1,7 +1,6 @@
 from __future__ import annotations
 from enum import IntEnum
 
-
 class RaceState(IntEnum):
     NOT_STARTED = 0
     RACING = 1

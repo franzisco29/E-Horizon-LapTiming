@@ -180,11 +180,7 @@ class Driver:
 
     def name_surname(self) -> str:
         initials = " ".join([f"{p[0]}." for p in self.name.split() if p])
-        return f"#{self.race_number:02d}| \t{initials} {self.surname}"
-
-    def name_surname_for_result(self) -> str:
-        initials = " ".join([f"{p[0]}." for p in self.name.split() if p])
-        return f"{self.race_number:02d} | {initials} {self.surname}"
+        return f"#{self.race_number:02d} | {initials} {self.surname}"
 
     def fst_lap_to_res(self, endurance: bool) -> str:
         if endurance:

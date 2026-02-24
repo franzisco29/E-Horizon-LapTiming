@@ -1,0 +1,18 @@
+app:
+  debug: true
+  admin: 1
+  first_launch: true
+paths:
+  root_path: C:\Users\franz\Desktop\E-Horizon Timing App
+timing:
+  debounce_ms: 500
+devices:
+  connection_type: 0
+  tcp_port: 20777
+  device_available: 1,0,0,0,0,0
+live:
+  enabled: false
+  ip: 127.0.0.1
+  port: 8888
+ui:
+  monitor_out: 0
