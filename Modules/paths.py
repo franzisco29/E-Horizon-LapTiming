@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 
-REQUIRED_FOLDERS: List[str] = ["Drivers", "Racelists", "Roadsters", "Results", "RAW", "Logs"]
+REQUIRED_FOLDERS: List[str] = ["Data","Drivers", "Racelists", "Roadsters", "Results", "RAW", "Logs","Settings"]
 USER_FILE = "userData.ini"
 
 

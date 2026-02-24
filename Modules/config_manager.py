@@ -1,11 +1,38 @@
 # Modules/config_manager.py
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Union
 
 import yaml
+
+from Modules.paths import create_required_folders
+
+
+# ----------------------------
+# App identity (Windows AppData folder)
+# ----------------------------
+APP_NAME = "E-Horizon-LapTiming"  # <-- cambia qui se vuoi
+
+
+def _win_appdata_dir(app_name: str = APP_NAME) -> Path:
+    """
+    Directory scrivibile utente per stato/config (Windows).
+    Esempio: C:\\Users\\<user>\\AppData\\Roaming\\<app_name>
+    """
+    appdata = os.environ.get("APPDATA")  # Roaming
+    if not appdata:
+        return Path.home() / app_name
+    return Path(appdata) / app_name
+
+
+def _locator_path() -> Path:
+    """
+    File che memorizza la posizione del vero settings.yaml.
+    """
+    return _win_appdata_dir(APP_NAME) / "settings_path.txt"
 
 
 # ----------------------------
@@ -14,7 +41,7 @@ import yaml
 @dataclass
 class AppConfig:
     debug: bool = True
-    admin: int = 0
+    admin: int = 1
     first_launch: bool = True
 
 
@@ -179,19 +206,37 @@ class Settings:
         self.ui.monitor_out = int(value)
 
     # ----------------------------
+    # Defaults (single source of truth)
+    # ----------------------------
+    @classmethod
+    def default(cls) -> "Settings":
+        """
+        Default ufficiali del progetto (modifica qui i tuoi default reali).
+        """
+        return cls(
+            app=AppConfig(debug=True, admin=1, first_launch=True),
+            # paths.root_path verrà impostato al primo avvio su <base>/Settings
+            timing=TimingConfig(debounce_ms=3000),
+            devices=DevicesConfig(connection_type=0, tcp_port=20777, device_available="1,0,0,0,0,0"),
+            live=LiveConfig(enabled=True, ip="127.0.0.1", port=8888),
+            ui=UIConfig(monitor_out=0),
+        )
+
+    # ----------------------------
     # Load / Save
     # ----------------------------
     @classmethod
     def load(cls, path: Union[str, Path]) -> "Settings":
         path = Path(path)
+
         if not path.exists():
-            cfg = cls()
+            cfg = cls.default()
             cfg._path = path
-            cfg.save()
+            cfg.save(path)
             return cfg
 
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        cfg = cls()
+        cfg = cls.default()
         cfg._path = path
 
         cfg.app.debug = bool(data.get("app", {}).get("debug", cfg.app.debug))
@@ -216,7 +261,7 @@ class Settings:
         return cfg
 
     def save(self, path: Union[str, Path, None] = None) -> None:
-        out_path = Path(path) if path else (self._path or Path("Config/settings.yaml"))
+        out_path = Path(path) if path else (self._path or Path("settings.yaml"))
         out_path.parent.mkdir(parents=True, exist_ok=True)
         self._path = out_path
 
@@ -273,23 +318,88 @@ class Settings:
 
         flags = self.devices.device_available_flags(expected_len=6)
         self.devices.set_device_available_flags(flags)
-        
-    @staticmethod
-    def default_path() -> Path:
-        """
-        Path di default del file settings.yaml.
-        Robust: basato sulla root progetto (cartella dove sta main.py).
-        """
-        project_root = Path(__file__).resolve().parents[1]  # Modules/ -> project root
-        return project_root / "Config" / "settings.yaml"
 
+    # ----------------------------
+    # Windows first-run: dialog + AppData locator
+    # ----------------------------
     @classmethod
     def load_default(cls) -> "Settings":
         """
-        Carica settings dal path di default (e lo crea se non esiste).
+        Windows:
+        - Se esiste il locator in %APPDATA%\\<APP_NAME>\\settings_path.txt, carica da lì.
+        - Altrimenti: primo avvio -> dialog per scegliere dove creare "Settings".
+          Crea Settings\\settings.yaml e cartelle richieste, salva e scrive locator.
         """
-        return cls.load(cls.default_path())
+        # 1) prova a risolvere dal locator (exe-safe)
+        state_dir = _win_appdata_dir(APP_NAME)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        locator = _locator_path()
 
+        if locator.exists():
+            saved = (locator.read_text(encoding="utf-8") or "").strip()
+            if saved:
+                p = Path(saved).expanduser()
+                if p.exists():
+                    return cls.load(p)
+
+        # 2) primo avvio: chiedi cartella base
+        base_dir = _pick_base_dir_windows()
+        if base_dir is None:
+            # fallback: crea in AppData se l'utente annulla
+            base_dir = state_dir
+
+        settings_dir = base_dir / "Settings"
+        settings_file = settings_dir / "settings.yaml"
+
+        first_time = not settings_file.exists()
+        cfg = cls.load(settings_file)
+
+        if first_time:
+            # IMPORTANT: root_path deve essere Settings_dir
+            cfg.root_path = str(base_dir)
+
+            create_required_folders(base_dir, force_creation=True)
+
+            cfg.first_launch = False
+            cfg.save(settings_file)
+
+        # 3) salva locator
+        locator.write_text(str(settings_file), encoding="utf-8")
+
+        return cfg
+
+    @classmethod
+    def reset_settings_location(cls) -> None:
+        """
+        Cancella il locator in AppData: al prossimo avvio verrà richiesto di nuovo il percorso.
+        """
+        loc = _locator_path()
+        try:
+            if loc.exists():
+                loc.unlink()
+        except Exception:
+            pass
+
+
+def _pick_base_dir_windows() -> Optional[Path]:
+    """
+    Apre una dialog Windows per scegliere una cartella base.
+    Ritorna None se annullato o se Tk non è disponibile.
+    """
+    try:
+        from tkinter import Tk, filedialog  # import locale per evitare problemi in ambienti headless
+
+        root = Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        chosen = filedialog.askdirectory(title="Scegli dove creare la cartella Settings")
+        root.destroy()
+
+        if not chosen:
+            return None
+        return Path(chosen).expanduser().resolve()
+    except Exception:
+        return None
 
 
 def _clamp_port(port: int) -> int:
