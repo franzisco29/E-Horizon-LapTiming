@@ -1,16 +1,25 @@
 @echo off
 echo ===============================
-echo   Installing requirements
+echo   Setup Virtual Environment
 echo ===============================
 
-REM Attiva venv se esiste
-IF EXIST .venv\Scripts\activate (
-    call .venv\Scripts\activate
+REM Se non esiste .venv lo crea
+IF NOT EXIST .venv (
+    echo Creating virtual environment...
+    py -m venv .venv
 )
 
-py -m pip --version
+REM Attiva il venv
+call .venv\Scripts\activate
+
+echo.
+echo Upgrading pip...
+py -m pip install --upgrade pip
+
+echo.
+echo Installing requirements...
 py -m pip install -r requirements.txt
 
 echo.
-echo Installation completed successfully!
+echo Done!
 pause
