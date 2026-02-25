@@ -55,6 +55,14 @@ class RaceManager:
     # lookup veloce number -> Driver
     driver_by_number: Dict[int, Driver] = field(default_factory=dict)
 
+    # --- Time-certain finish (time based races) ---
+    # Latch che diventa True quando il tempo arriva a 0 (gestito nel setter di session_time)
+    time_over: bool = False
+    # True quando il leader completa il giro dopo time_over/session finished
+    leader_finished: bool = False
+    # (debug) giro a cui il leader ha chiuso
+    leader_finish_lap: Optional[int] = None
+
     def __post_init__(self) -> None:
         self.session = Session(self._session_type)
 
@@ -66,8 +74,18 @@ class RaceManager:
     # ============================================================
 
     def set_session_race_list(self, value: RaceList) -> None:
+        """
+        Imposta la race list corrente e ricostruisce la mappa number -> Driver.
+        Va chiamato SEMPRE quando cambi lista (load incluso), per evitare mismatch/KeyError.
+        """
         self.session_race_list = value
-        self.driver_by_number = {d.number: d for d in value.drivers}
+        drivers = value.drivers if value and getattr(value, "drivers", None) else []
+        self.driver_by_number = {d.number: d for d in drivers}
+
+        # reset flags/time-over (nuova sessione/lista)
+        self.time_over = False
+        self.leader_finished = False
+        self.leader_finish_lap = None
 
     # ============================================================
     # Shortcuts
@@ -112,7 +130,14 @@ class RaceManager:
 
     @session_time.setter
     def session_time(self, value: int) -> None:
-        self.session.session_time = int(value)
+        # Clamp + latch: quando arrivi a 0, time_over resta True (evita edge-case con valori negativi)
+        v = int(value)
+        if v <= 0:
+            self.session.session_time = 0
+            if not self.time_over:
+                self.time_over = True
+        else:
+            self.session.session_time = v
 
     @property
     def session_status(self) -> int:
@@ -148,6 +173,11 @@ class RaceManager:
         self.session_status = int(SessionState.Started)
         self.session.pit_state = 1
 
+        # reset finish flags
+        self.time_over = False
+        self.leader_finished = False
+        self.leader_finish_lap = None
+
         now = datetime.now()
         for d in self.session_race_list.drivers:
             d.set_start_time()
@@ -167,6 +197,8 @@ class RaceManager:
             return
 
         self.session_status = int(SessionState.Finished)
+        # consideriamo la sessione chiusa come "time over" per la logica di chiusura giro
+        self.time_over = True
 
         if not self.race:
             for d in self.session_race_list.drivers:
@@ -183,8 +215,20 @@ class RaceManager:
         self.session_status = int(SessionState.Started)
         self.session.pit_state = 1
 
+        # reset finish flags
+        self.time_over = False
+        self.leader_finished = False
+        self.leader_finish_lap = None
+
     def reset_session(self) -> None:
         self.session_status = int(SessionState.NotStarted)
+        self.time_over = False
+        self.leader_finished = False
+        self.leader_finish_lap = None
+
+        # reset debounce maps (coerente con VB)
+        self.last_device_detected.clear()
+        self.last_time_detected.clear()
 
     # ============================================================
     # Live / naming / points
@@ -211,6 +255,78 @@ class RaceManager:
         self.last_time_detected[d.number] = datetime.now()
 
     # ============================================================
+    # Helpers (safe lookup / resolve index)
+    # ============================================================
+
+    def _get_driver_safe(self, number: int) -> Optional[Driver]:
+        """Recupera un Driver senza mai sollevare KeyError."""
+        drv = self.driver_by_number.get(int(number))
+        if drv is not None:
+            return drv
+        if self.session_race_list and self.session_race_list.drivers:
+            return next((d for d in self.session_race_list.drivers if d.number == int(number)), None)
+        return None
+
+    def _resolve_driver_index(self, fallback_index: int, number: int) -> int:
+        """
+        Allinea driver_index (UI) e number (transponder). Se mismatch, trova l'indice corretto per number.
+        """
+        if not self.session_race_list or not self.session_race_list.drivers:
+            return fallback_index
+
+        drivers = self.session_race_list.drivers
+        if 0 <= fallback_index < len(drivers) and drivers[fallback_index].number == int(number):
+            return fallback_index
+
+        for i, d in enumerate(drivers):
+            if d.number == int(number):
+                return i
+
+        return fallback_index
+
+    def _mark_driver_finished(self, number: int, reason: str = "") -> bool:
+        drv = self._get_driver_safe(int(number))
+        if drv is None:
+            return False
+        if drv.race_status == RaceState.FINISHED:
+            return False
+        drv.race_status = RaceState.FINISHED
+        return True
+
+    def _apply_finish_on_central(self, number: int) -> None:
+        """
+        Applica la logica di fine gara SOLO al completamento giro (Central):
+        - quando il tempo è finito (time_over=True) *oppure* session_status=Finished
+        - il leader chiude per primo; dopo che il leader ha chiuso, tutti chiudono al loro primo Central.
+        Copre anche il caso in cui un altro diventa leader dopo lo 0.
+        """
+        if not self.race:
+            # Per practice/quali: se la sessione è finita, chiude al prossimo passaggio Central
+            if self.session_status == int(SessionState.Finished):
+                self._mark_driver_finished(number, reason="NON_RACE_FINISHED")
+            return
+
+        if not self.session_race_list or not self.session_race_list.drivers:
+            return
+
+        # condizione di attivazione: tempo finito o sessione marcata Finished
+        if not (self.time_over or self.session_status == int(SessionState.Finished)):
+            return
+
+        leader_number = self.session_race_list.drivers[0].number
+
+        if not self.leader_finished:
+            # chiude il leader "attuale" (post-sorting)
+            if int(number) == int(leader_number):
+                if self._mark_driver_finished(number, reason="LEADER_CLOSES"):
+                    self.leader_finished = True
+                    drv = self._get_driver_safe(number)
+                    self.leader_finish_lap = getattr(drv, "laps", None) if drv else None
+            return
+
+        # leader già chiuso -> chiude chiunque al prossimo Central
+        self._mark_driver_finished(number, reason="AFTER_LEADER")
+    # ============================================================
     # Main event: lap_done
     # ============================================================
 
@@ -225,6 +341,7 @@ class RaceManager:
         if not self.session_race_list or device < 0:
             return int(LapState.Invalid)
 
+        driver_index = self._resolve_driver_index(driver_index, number)
         driver = self.session_race_list.drivers[driver_index]
 
         lap_state = self._set_lap_status(
@@ -258,11 +375,8 @@ class RaceManager:
                 driver.out_lap(self.session.sectors_on, self.race)
                 self._calculate_delta()
 
-            # VB: se Race e timer finito e passa il leader => finisce
-            if self.race and self.session_time == 0 and self.session_race_list.drivers:
-                leader_number = self.session_race_list.drivers[0].number
-                if number == leader_number:
-                    self.driver_by_number[number].race_status = RaceState.FINISHED
+            # Applica logica di fine gara (time-certain / session-finished) dopo sorting/delta
+            self._apply_finish_on_central(number)
 
             return int(lap_state)
 
@@ -401,6 +515,7 @@ class RaceManager:
         if not self.session_race_list:
             return LapState.Invalid
 
+        driver_index = self._resolve_driver_index(driver_index, number)
         driver = self.session_race_list.drivers[driver_index]
 
         if self._is_debounced(driver.number, swap):
@@ -424,11 +539,9 @@ class RaceManager:
 
                 if self.session_status == int(SessionState.Finished):
                     if self.race:
-                        leader_finished = (
-                            self.session_race_list.drivers[0].race_status == RaceState.FINISHED
-                        )
-                        if leader_finished or driver_index == 0:
-                            driver.race_status = RaceState.FINISHED
+                        # In race: la chiusura effettiva è gestita in lap_done dopo ordering.
+                        # Qui non forziamo FINISHED per evitare mismatch di indice.
+                        pass
                     else:
                         driver.race_status = RaceState.FINISHED
 
@@ -450,11 +563,9 @@ class RaceManager:
 
                 if self.session_status == int(SessionState.Finished):
                     if self.race:
-                        leader_finished = (
-                            self.session_race_list.drivers[0].race_status == RaceState.FINISHED
-                        )
-                        if leader_finished or driver_index == 0:
-                            driver.race_status = RaceState.FINISHED
+                        # In race: la chiusura effettiva è gestita in lap_done dopo ordering.
+                        # Qui non forziamo FINISHED per evitare mismatch di indice.
+                        pass
                     else:
                         driver.race_status = RaceState.FINISHED
 

@@ -37,6 +37,8 @@ from Classes.roadster import Roadster
 
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 
+import traceback
+
 import time
 from time import perf_counter #to see
 
@@ -288,12 +290,14 @@ class RaceManagerWindow(QWidget):
     # ------------------------------------------------------------
     def _admin_setup(self) -> None:
         # RaceManager init (compat per firme diverse)
-        debounce_ms = int(getattr(getattr(self.settings, "timing", None), "debounce_ms", 3000) or 3000)
-
+        debounce_ms = self.settings.debounce_ms
+        log(f"[RaceWindow] {debounce_ms}")
         try:
             self.race_man = RaceManager(0, debounce_ms)
         except TypeError:
             self.race_man = RaceManager(session_type=0, debounce_ms=debounce_ms)
+            
+        self.race_man.logger = log
 
         # LiveTiming
         live_ip = getattr(getattr(self.settings, "live", None), "ip", "127.0.0.1")
@@ -318,7 +322,7 @@ class RaceManagerWindow(QWidget):
         type(self.device_man).add_transponder_simulated_index_listener(self._cb_transponder)
 
         # UI session info
-        self.refs.ip_value.setText(ip if conn_type != ConnectionTypes.NONE else "NONE")
+        self.refs.ip_label.setText(ip if conn_type != ConnectionTypes.NONE else "NONE")
 
         # Startup window only if not NONE
         if self.device_man.conn_type == ConnectionTypes.NONE:
@@ -603,7 +607,6 @@ class RaceManagerWindow(QWidget):
             except Exception as e:
                 log(f"[RaceWindow] set_best_lap_cell ERROR: {e}")
             
-    
     # ------------------------------------------------------------
     # Session type change & Swap -- OK DO NOT TOUCH
     # ------------------------------------------------------------
@@ -640,7 +643,6 @@ class RaceManagerWindow(QWidget):
             set_display_index(6, 11)
             set_display_index(11, 6)
 
-   
     @Slot(int)
     def _on_session_type_changed(self, idx: int) -> None:
         if not self.race_man:
@@ -935,7 +937,6 @@ class RaceManagerWindow(QWidget):
         if self.live_man and self.live_man.enabled:
             self.live_man.send_session_info(self.race_man)
     
-    
     # ------------------------------------------------------------
     # RESET TO IMPLEMENT BETTER
     # ------------------------------------------------------------
@@ -972,6 +973,9 @@ class RaceManagerWindow(QWidget):
                 rm.session_time = 0
             except Exception:
                 pass
+            
+            if not self.time_over:
+                self.race_man.time_over = True
 
             self.refs.timer_value.setText("00:00")
 
@@ -1100,8 +1104,6 @@ class RaceManagerWindow(QWidget):
         except Exception:
             pass
 
-
-
     def _on_pos_tick(self) -> None:
         if self.race_man:
             try:
@@ -1180,27 +1182,12 @@ class RaceManagerWindow(QWidget):
 
             rl = self.session_race_list  # RaceList
 
-            numbers: list[int] = []
-            drivers: list[object] = []
-
-            # come VB: For Each num In Drivers -> list.Add(num.Number)
-            for d in rl.drivers:
-                numbers.append(int(getattr(d, "Number", getattr(d, "number"))))
-                drivers.append(d)
-
-            # come VB: If raceMan.Endurance Then ... ReserveDrivers
-            # Nel tuo Python: endurance_list indica se la lista è endurance
-            if rl.endurance_list:
-                for d in rl.reserve_drivers:
-                    numbers.append(int(getattr(d, "Number", getattr(d, "number"))))
-                drivers.extend(rl.reserve_drivers)
-
             dlg = DebugWindow(
-                self,
-                numbers=numbers,
-                drivers=drivers,
-                device_manager=self.device_man,
-            )
+                    self,
+                    racelist=rl,
+                    device_manager=self.device_man,
+                    is_endurance=self.race_man.endurance,
+                )
             dlg.show()  # VB: Show()
 
         except Exception as e:
@@ -1313,7 +1300,6 @@ class RaceManagerWindow(QWidget):
             self.refs.pit_labelsetText("Pit Closed")
             log("Pit CLOSED")
 
-
     def control_pit_lane_open(self) -> None:
         """
         Porting VB ControlPitLaneOpen()
@@ -1342,12 +1328,9 @@ class RaceManagerWindow(QWidget):
         except Exception as e:
             log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
 
-
     # ------------------------------------------------------------
     # Transponder (placeholder; completamento endurance/swap nel prossimo step)
     # ------------------------------------------------------------
-
-
     @Slot(int, int)
     def _on_transponder_gui_thread(self, device: int, number: int) -> None:
         # --- guard clauses
@@ -1455,7 +1438,8 @@ class RaceManagerWindow(QWidget):
         try:
             rm.lap_done(driver_index, int(number), int(device), bool(swap))
         except Exception as e:
-            log(f"[RaceWindow] lap_done ERROR: {e}")
+            log(f"[RaceWindow] lap_done ERROR: {type(e).__name__}: {e}")
+            log(traceback.format_exc())
             return
 
         # --- indices for GUI (idx is simply driver_index if mapping is consistent)
@@ -1489,6 +1473,7 @@ class RaceManagerWindow(QWidget):
     # ------------------------------------------------------------
     # Utils
     # ------------------------------------------------------------
+    
     def _format_mmss(self, sec: int) -> str:
         if sec < 0:
             sec = 0
@@ -1538,8 +1523,6 @@ class RaceManagerWindow(QWidget):
 
         super().closeEvent(event)
         
-
-
     def setup_laptimingtable(self) -> None:
         """
         VB: LapTimingViewSetup() -> PySide6

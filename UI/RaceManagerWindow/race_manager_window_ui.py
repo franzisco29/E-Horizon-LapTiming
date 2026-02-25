@@ -14,7 +14,7 @@ class RaceManagerWindowRefs:
     pit_label: QLabel
     track_value: QLabel
     track_panel: QFrame
-    ip_value: QLabel
+    ip_label: QLabel
     racelist_box: QComboBox
     session_box: QComboBox
     load_btn: QPushButton
@@ -244,7 +244,7 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         pit_label             = pit_val,
         track_value           = track_val,
         track_panel           = track_panel,
-        ip_value              = ip_val,
+        ip_label              = ip_val,
 
         racelist_box          = racelist_box,
         session_box           = session_box,

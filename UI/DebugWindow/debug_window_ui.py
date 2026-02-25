@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -22,6 +22,13 @@ class DebugWindowUIRefs:
 
 
 class DebugWindowUI(QWidget):
+    """
+    UI “card list” con righe dinamiche.
+
+    - add_row(...)           -> modalità normale (1 driver = 1 riga)
+    - add_row_endurance(...) -> modalità endurance (1 team = 1 riga + SWAP)
+    """
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("DebugWindowUI")
@@ -43,9 +50,15 @@ class DebugWindowUI(QWidget):
                 border: 1px solid #1A2433;
                 border-radius: 16px;
             }
-            QLabel#DriverName {
+            QLabel#PrimaryLabel {
                 color: #EAF2FF;
-                font-weight: 600;
+                font-weight: 700;
+                font-size: 10pt;
+            }
+            QLabel#SecondaryLabel {
+                color: rgba(234, 242, 255, 0.75);
+                font-weight: 500;
+                font-size: 9pt;
             }
             QPushButton {
                 height: 36px;
@@ -60,6 +73,13 @@ class DebugWindowUI(QWidget):
             QPushButton:hover {
                 background: #121B2B;
                 border: 1px solid rgba(0,166,255,0.65);
+            }
+            QPushButton#SwapButton {
+                border: 1px solid rgba(0,166,255,0.65);
+            }
+            QPushButton#SwapButton:hover {
+                background: rgba(0,166,255,0.12);
+                border: 1px solid rgba(0,166,255,0.95);
             }
             QScrollArea { background: transparent; }
             QScrollBar:vertical {
@@ -111,9 +131,6 @@ class DebugWindowUI(QWidget):
             rows_layout=rows_layout,
         )
 
-    # ---------
-    # UI helpers
-    # ---------
     def clear_rows(self) -> None:
         layout = self.refs.rows_layout
         while layout.count():
@@ -123,6 +140,13 @@ class DebugWindowUI(QWidget):
                 w.deleteLater()
         layout.addStretch(1)
 
+    def _insert_card(self, card: QFrame) -> None:
+        layout = self.refs.rows_layout
+        layout.insertWidget(max(0, layout.count() - 1), card)
+
+    # ----------------
+    # Normal row
+    # ----------------
     def add_row(
         self,
         driver_label: str,
@@ -139,7 +163,7 @@ class DebugWindowUI(QWidget):
         hl.setSpacing(10)
 
         lbl = QLabel(driver_label)
-        lbl.setObjectName("DriverName")
+        lbl.setObjectName("PrimaryLabel")
         lbl.setMinimumWidth(260)
         hl.addWidget(lbl, 1)
 
@@ -149,6 +173,67 @@ class DebugWindowUI(QWidget):
             btn.clicked.connect(on_click_factory(device, number))
             hl.addWidget(btn, 0)
 
-        # inserisci prima dello stretch finale
-        layout = self.refs.rows_layout
-        layout.insertWidget(max(0, layout.count() - 1), card)
+        self._insert_card(card)
+
+    # ----------------
+    # Endurance row
+    # ----------------
+    def add_row_endurance(
+        self,
+        team_label: str,
+        active_label: str,
+        reserve_label: str,
+        active_number: int,
+        on_click_factory,
+        on_swap: Callable[[], None],
+        *,
+        swap_enabled: bool = True,
+    ) -> None:
+        """
+        1 riga = 1 team
+        - i 5 pulsanti standard usano active_number
+        - SWAP richiama on_swap()
+        """
+        card = QFrame()
+        card.setObjectName("RowCard")
+        hl = QHBoxLayout(card)
+        hl.setContentsMargins(14, 10, 14, 10)
+        hl.setSpacing(10)
+
+        # Left block: team + active/reserve
+        left = QVBoxLayout()
+        left.setSpacing(2)
+
+        lbl_team = QLabel(team_label)
+        lbl_team.setObjectName("PrimaryLabel")
+        left.addWidget(lbl_team)
+
+        lbl_active = QLabel(f"ACTIVE • {active_label}")
+        lbl_active.setObjectName("SecondaryLabel")
+        left.addWidget(lbl_active)
+
+        lbl_res = QLabel(f"RESERVE • {reserve_label}")
+        lbl_res.setObjectName("SecondaryLabel")
+        left.addWidget(lbl_res)
+
+        left_wrap = QWidget()
+        left_wrap.setLayout(left)
+        left_wrap.setMinimumWidth(300)
+        hl.addWidget(left_wrap, 1)
+
+        # Standard buttons
+        for device in range(5):
+            btn = QPushButton(cast_num(device))
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(on_click_factory(device, active_number))
+            hl.addWidget(btn, 0)
+
+        # Swap
+        btn_swap = QPushButton("SWAP")
+        btn_swap.setObjectName("SwapButton")
+        btn_swap.setCursor(Qt.PointingHandCursor)
+        btn_swap.setEnabled(bool(swap_enabled))
+        btn_swap.clicked.connect(on_swap)
+        hl.addWidget(btn_swap, 0)
+
+        self._insert_card(card)
