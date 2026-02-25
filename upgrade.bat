@@ -8,16 +8,8 @@ IF EXIST .venv\Scripts\activate (
     call .venv\Scripts\activate
 )
 
-echo.
-echo Installing from requirements.txt ...
-pip install -r requirements.txt
-
-IF %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo ERROR during installation!
-    pause
-    exit /b
-)
+py -m pip --version
+py -m pip install -r requirements.txt
 
 echo.
 echo Installation completed successfully!
