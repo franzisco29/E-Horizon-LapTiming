@@ -2,15 +2,19 @@ from PySide6.QtGui import QColor, QBrush
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QTableWidget
 
+from Classes.race_manager import  LapState
+
 
 # =========================
 # COLORI BASE
 # =========================
 
-PASSED_COLOR = QColor(255, 255, 134)     # Giallino passaggio
-POLE_COLOR = QColor(153, 102, 204)       # Viola Best Lap / Leader
-END_COLOR = QColor(84, 84, 84)           # Grigio fine gara
-SWAP_COLOR = QColor(30, 144, 255)        # Blu cambio pilota
+PASSED_COLOR   = QColor(230, 194, 2, 204)     # Giallino passaggio (80%)
+POLE_COLOR     = QColor(153, 102, 204, 204)   # Viola Best Lap / Leader (80%)
+END_COLOR      = QColor(84, 84, 84)           # Grigio fine gara (100% opaco)
+SWAP_COLOR     = QColor(30, 144, 255, 204)    # Blu cambio pilota (80%)
+PIT_IN_COLOR   = QColor(255, 140, 0, 204)     # Arancio Pit In (80%)
+PIT_OUT_COLOR  = QColor(0, 200, 83, 204)      # Verde Pit Out (80%)
 
 # Bandiere
 GREEN_FLAG = QColor("green")
@@ -50,7 +54,7 @@ def _reset_row_to_default(table: QTableWidget, row: int) -> None:
 # PASS COLOR
 # =========================
 
-def set_pass_color(table: QTableWidget, row_index: int, swap: bool, best_lap_row: int) -> None:
+def set_pass_color(table: QTableWidget, row_index: int, swap: bool, best_lap_row: int, passed_val: int) -> None:
     """
     Evidenzia temporaneamente una riga al passaggio del transponder.
     Poi ripristina il colore originale del tema.
@@ -65,10 +69,22 @@ def set_pass_color(table: QTableWidget, row_index: int, swap: bool, best_lap_row
         delay = 1000
     else:
         if row_index == 0:
-            _apply_row_style(table, row_index, POLE_COLOR, QColor("white"))
+            if passed_val == LapState.Valid:
+                _apply_row_style(table, row_index, POLE_COLOR, QColor("white"))
+            elif passed_val == LapState.OutLap:
+                _apply_row_style(table, row_index, PIT_OUT_COLOR, QColor("white"))
+            elif passed_val == LapState.InPit:
+                _apply_row_style(table, row_index, PIT_IN_COLOR, QColor("white"))
+                
             delay = 1000
+                
         else:
-            _apply_row_style(table, row_index, PASSED_COLOR, QColor("black"))
+            if passed_val == LapState.Valid:
+                _apply_row_style(table, row_index, PASSED_COLOR, QColor("white"))
+            elif passed_val == LapState.OutLap:
+                _apply_row_style(table, row_index, PIT_OUT_COLOR, QColor("white"))
+            elif passed_val == LapState.InPit:
+                _apply_row_style(table, row_index, PIT_IN_COLOR, QColor("white"))
             delay = 500
 
     def _restore():

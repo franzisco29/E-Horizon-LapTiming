@@ -245,6 +245,38 @@ class Driver:
             fmt_mm_ss_mmm(self.time_on_track),
         ]
 
+    def to_live_dict(self) -> dict:
+        """Dict ready for LiveTiming (stable IDs + same columns as UI)."""
+        status = self.get_status_string()
+        name = self.name_surname()
+
+        # NOTE: keep same formatting as UI table
+        self.time_on_track = self.race_time - self.start_time
+        interval = self.print_delta(True)
+        gap = self.print_delta(False)
+
+        return {
+            # stable identifiers
+            "driverId": int(self.driver_id),
+            "number": int(self.number),
+            "raceNumber": int(self.race_number),
+
+            # table fields
+            "position": int(self.position),
+            "name": name,
+            "team": self.team,
+            "sector1": self._sector_to_string(0),
+            "sector2": self._sector_to_string(1),
+            "sector3": self._sector_to_string(2),
+            "lastLap": fmt_mm_ss_mmm(self.last_lap),
+            "laps": int(self.laps),
+            "status": status,
+            "gap": gap,
+            "interval": interval,
+            "fastLap": fmt_mm_ss_mmm(self.fast_lap),
+            "timeOnTrack": fmt_mm_ss_mmm(self.time_on_track),
+        }
+
     def to_live(self) -> str:
         """
         VB: crea oggetto anonimo e serializza JSON.
@@ -252,28 +284,7 @@ class Driver:
         """
         import json
 
-        status = self.get_status_string()
-        name = self.name_surname()
-
-        self.time_on_track = self.race_time - self.start_time
-        interval = self.print_delta(True)
-        gap = self.print_delta(False)
-
-        driver_data = {
-            "position": self.position,
-            "name": name,
-            "team": self.team,
-            "sector1": self._sector_to_string(0),
-            "sector2": self._sector_to_string(1),
-            "sector3": self._sector_to_string(2),
-            "lastLap": fmt_mm_ss_mmm(self.last_lap),
-            "laps": self.laps,
-            "status": status,
-            "gap": gap,
-            "interval": interval,
-            "fastLap": fmt_mm_ss_mmm(self.fast_lap),
-            "timeOnTrack": fmt_mm_ss_mmm(self.time_on_track),
-        }
+        driver_data = self.to_live_dict()
 
         return json.dumps(driver_data, ensure_ascii=False, separators=(",", ":"))
 

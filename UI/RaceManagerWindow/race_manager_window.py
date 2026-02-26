@@ -299,15 +299,18 @@ class RaceManagerWindow(QWidget):
             
         self.race_man.logger = log
 
-        # LiveTiming
-        live_ip = getattr(getattr(self.settings, "live", None), "ip", "127.0.0.1")
-        live_port = int(getattr(getattr(self.settings, "live", None), "port", 8888))
-        
-        self.live_man = LiveTimingManager(live_ip, live_port)
-        self.live_man.start()
-        self.live_man.enabled = True
-        
-        log(f"[RaceWindow]  LiveTiming: started on {live_ip}:{live_port}")
+        self.live_man = None
+
+        if self.settings.live_enabled:
+            live_ip = self.settings.live_ip
+            live_port = self.settings.live_port
+
+            self.live_man = LiveTimingManager(live_ip, live_port, root_path=self.settings.root_path)
+            self.live_man.start()
+
+            log(f"[RaceWindow] LiveTiming started on {live_ip}:{live_port} (WEB on {live_port + 1})")
+        else:
+            log("[RaceWindow] LiveTiming disabled by settings")
 
         # DeviceManager
         ip = self._get_local_ip_best_effort()
@@ -568,7 +571,7 @@ class RaceManagerWindow(QWidget):
                 t.scrollToItem(it)  # comodo come “restore focus”
                 return
 
-    def _update_gui_after_pass(self, lista: RaceList, idx: int, best_idx: int, swap: bool) -> None:
+    def _update_gui_after_pass(self, lista: RaceList, idx: int, best_idx: int, swap: bool, lap_state: int) -> None:
         """
         Porting VB UpdateGUI(...)
         - salva selezione
@@ -587,9 +590,9 @@ class RaceManagerWindow(QWidget):
         except Exception:
             rs = 0
 
-        if rs != 2 and rs < 5:
+        if rs != 2 and rs < 5 and lap_state>0:
             try:
-                set_pass_color(self.refs.lap_table, idx, swap, best_idx)
+                set_pass_color(self.refs.lap_table, idx, swap, best_idx, lap_state)
             except Exception as e:
                 log(f"[RaceWindow] set_pass_color ERROR: {e}")
 
@@ -606,7 +609,17 @@ class RaceManagerWindow(QWidget):
                 set_best_lap_cell(self.refs.lap_table, best_idx)
             except Exception as e:
                 log(f"[RaceWindow] set_best_lap_cell ERROR: {e}")
-            
+        
+        if self.live_man:
+            kind = "swap" if swap else ("pole" if idx == 0 else "passed")
+            try:
+                # chiave stabile: NUMBER (transponder)
+                d = lista.drivers[idx]
+                key = getattr(d, "number", None) or getattr(d, "driver_id", idx)
+                self.live_man.send_event(key, kind)
+            except Exception:
+                pass
+                    
     # ------------------------------------------------------------
     # Session type change & Swap -- OK DO NOT TOUCH
     # ------------------------------------------------------------
@@ -974,7 +987,7 @@ class RaceManagerWindow(QWidget):
             except Exception:
                 pass
             
-            if not self.time_over:
+            if not self.race_man.time_over:
                 self.race_man.time_over = True
 
             self.refs.timer_value.setText("00:00")
@@ -1329,16 +1342,41 @@ class RaceManagerWindow(QWidget):
             log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
 
     # ------------------------------------------------------------
-    # Transponder (placeholder; completamento endurance/swap nel prossimo step)
+    # Transponder (placeholder; completamento endurance/swap nel prossimo step) -- NO
     # ------------------------------------------------------------
+    
+    def _index_for_number(self, lista: RaceList, number: int) -> int:
+        try:
+            n = int(number)
+        except Exception:
+            return -1
+        try:
+            for i, d in enumerate(lista.drivers):
+                if int(getattr(d, "number", -1)) == n:
+                    return i
+        except Exception:
+            pass
+        return -1
+
+
+    def _best_index(self, lista: RaceList, rm) -> int:
+        try:
+            best_num = getattr(rm, "best_lap_driver", None)
+            if best_num is None:
+                best_num = getattr(rm, "BestLapDriver", None)
+            if best_num is None:
+                return -1
+            return self._index_for_number(lista, int(best_num))
+        except Exception:
+            return -1
+    
+    
     @Slot(int, int)
     def _on_transponder_gui_thread(self, device: int, number: int) -> None:
-        # --- guard clauses
         if number == 0:
             return
 
         dm = self.device_man
-        
         if dm is not None:
             flags = getattr(dm, "active_flags", None)
             if not flags or device < 0 or device >= len(flags) or not flags[device]:
@@ -1346,55 +1384,45 @@ class RaceManagerWindow(QWidget):
 
         rm = self.race_man
         rl = self.session_race_list
-        
         if rm is None or rl is None:
             return
 
         t0 = perf_counter()
-        
         swap = False
 
-        # build number->index once (fast)
-        try:
-            idx_by_num = {int(d.number): i for i, d in enumerate(rl.drivers)}
-        except Exception:
-            idx_by_num = {}
+        # indice corrente (se esiste già)
+        driver_index = self._index_for_number(rl, number)
 
-        driver_index = idx_by_num.get(int(number), -1)
-
-        # --- endurance swap if not found
+        # --- endurance swap se non trovato
         if driver_index < 0:
-            
             if not rm.endurance:
                 return
 
-            # find roadster containing number
-            roadster_idx = -1
+            # trova roadster che contiene quel number
+            roadster = None
             try:
-                for i, r in enumerate(rl.roadsters):
+                for r in rl.roadsters:
                     nums = getattr(r, "numbers", None) or []
-                    if int(number) in nums:
-                        roadster_idx = i
+                    if int(number) in [int(x) for x in nums]:
+                        roadster = r
                         break
             except Exception:
-                roadster_idx = -1
+                roadster = None
 
-            if roadster_idx < 0:
+            if roadster is None:
                 return
 
-            roadster = rl.roadsters[roadster_idx]
-
-            # find swap_index by actual driver number
+            # swap_index = indice del driver attuale di quel roadster
             try:
                 actual_driver = roadster.getActualDriver
-                swap_index = idx_by_num.get(int(actual_driver.number), -1)
+                swap_index = self._index_for_number(rl, int(actual_driver.number))
             except Exception:
                 swap_index = -1
 
             if swap_index < 0:
                 return
 
-            # swap + update lists
+            # swap + update liste
             try:
                 roadster.SwapDriver()
                 rl.drivers[swap_index] = roadster.getActualDriver
@@ -1403,24 +1431,19 @@ class RaceManagerWindow(QWidget):
                 log(f"[RaceWindow] swap ERROR: {e}")
                 return
 
-            # refresh race manager mapping (important)
+            # refresh mapping RaceManager
             self.session_race_list = rl
             try:
                 rm.set_session_race_list(rl)
             except Exception:
                 rm.session_race_list = rl
 
-            # now the driver should exist as actual driver, so recompute index map once
-            try:
-                idx_by_num = {int(d.number): i for i, d in enumerate(rl.drivers)}
-            except Exception:
-                idx_by_num = {}
-
-            driver_index = idx_by_num.get(int(number), -1)
+            # ora l'actual driver dovrebbe esistere in lista
+            driver_index = self._index_for_number(rl, number)
             if driver_index < 0:
                 return
 
-            # start time reserve (if present)
+            # start time reserve (se presente)
             try:
                 rm.set_start_time_reserve(driver_index, device)
             except Exception:
@@ -1436,33 +1459,30 @@ class RaceManagerWindow(QWidget):
 
         # --- lap done
         try:
-            rm.lap_done(driver_index, int(number), int(device), bool(swap))
+            lap_state = rm.lap_done(driver_index, int(number), int(device), bool(swap))
+            log(f"[RaceWindow] Pass: {lap_state}")
         except Exception as e:
             log(f"[RaceWindow] lap_done ERROR: {type(e).__name__}: {e}")
             log(traceback.format_exc())
             return
 
-        # --- indices for GUI (idx is simply driver_index if mapping is consistent)
-        idx = idx_by_num.get(int(number), driver_index)
+        # ✅ passed SOLO se non debounced/invalid
+        # (meglio usare LapState enum: qui lascio una forma compatibile)
+        
+        
+        # Dopo lap_done l'ordine può cambiare: ricalcola idx e best_idx sull'ordine ATTUALE
+        idx = self._index_for_number(rl, number)
+        best_idx = self._best_index(rl, rm)
 
-        best_idx = -1
+        # --- UI refresh
         try:
-            best_num = getattr(rm, "best_lap_driver", None)
-            if best_num is None:
-                best_num = getattr(rm, "BestLapDriver", None)
-            if best_num is not None:
-                best_idx = idx_by_num.get(int(best_num), -1)
-        except Exception:
-            best_idx = -1
-
-        # --- UI refresh (VB UpdateGUI)
-        try:
-            self._update_gui_after_pass(rl, idx=idx, best_idx=best_idx, swap=swap)
+            self._update_gui_after_pass(rl, idx=idx, best_idx=best_idx, swap=swap, lap_state=int(lap_state))
         except Exception as e:
             log(f"[RaceWindow] _update_gui_after_pass ERROR: {e}")
 
         dt_ms = int((perf_counter() - t0) * 1000)
         log(f"[RaceWindow] HandleTransponderPass took {dt_ms} ms (swap={swap}, idx={idx}, best_idx={best_idx})")
+
 
     # ------------------------------------------------------------
     # Save results (hook, poi integriamo ResultManager)
@@ -1508,8 +1528,9 @@ class RaceManagerWindow(QWidget):
 
         try:
             if self.live_man:
-                self.live_man.enabled = False
                 self.live_man.stop()
+                self.live_man = None
+                log("LiveTiming stopped")
                 log("LiveTiming stopped")
         except Exception as e:
             log(f"[RaceWindow] LiveTiming stop error: {e}")

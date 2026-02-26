@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from enum import IntEnum
 from typing import Dict, List, Optional
 
-from Classes.session import Session, SessionTypes, SessionState
+from Classes.session import Session, SessionTypes, SessionState, PitOpenState
 from Classes.race_list import RaceList
 from Classes.driver import Driver
 
@@ -205,15 +205,15 @@ class RaceManager:
                 if d.race_status == RaceState.IN_PIT:
                     d.finish()
 
-        self.session.pit_state = 0
+        self.session.pit_state = PitOpenState.Closed
 
     def stop_session(self) -> None:
         self.session_status = int(SessionState.Stopped)
-        self.session.pit_state = 0
+        self.session.pit_state = PitOpenState.Closed
 
     def resume_session(self) -> None:
         self.session_status = int(SessionState.Started)
-        self.session.pit_state = 1
+        self.session.pit_state = PitOpenState.Open
 
         # reset finish flags
         self.time_over = False
@@ -514,6 +514,9 @@ class RaceManager:
         """
         if not self.session_race_list:
             return LapState.Invalid
+        
+        if self.session_status < SessionState.Started:
+            return LapState.Invalid
 
         driver_index = self._resolve_driver_index(driver_index, number)
         driver = self.session_race_list.drivers[driver_index]
@@ -611,7 +614,7 @@ class RaceManager:
             if actual_status == RaceState.RACING:
                 driver.race_status = RaceState.IN_PIT
                 self.last_time_detected[driver.number] = datetime.now()
-                return LapState.Valid
+                return LapState.InPit
 
             if actual_status == RaceState.FINISHED:
                 driver.race_status = RaceState.FINISHED
@@ -625,7 +628,7 @@ class RaceManager:
             if actual_status == RaceState.OUTLAP:
                 driver.race_status = RaceState.IN_PIT
                 self.last_time_detected[driver.number] = datetime.now()
-                return LapState.Invalid
+                return LapState.InPit
 
             return LapState.Invalid
 
@@ -638,7 +641,7 @@ class RaceManager:
             if actual_status == RaceState.RACING:
                 driver.race_status = RaceState.OUTLAP
                 self.last_time_detected[driver.number] = datetime.now()
-                return LapState.Valid
+                return LapState.OutLap
 
             if actual_status == RaceState.FINISHED:
                 driver.race_status = RaceState.FINISHED
@@ -647,7 +650,7 @@ class RaceManager:
             if actual_status == RaceState.IN_PIT:
                 driver.race_status = RaceState.OUTLAP
                 self.last_time_detected[driver.number] = datetime.now()
-                return LapState.OutLap if (self.endurance or self.race) else LapState.Invalid
+                return LapState.OutLap 
 
             if actual_status == RaceState.OUTLAP:
                 driver.race_status = RaceState.OUTLAP
@@ -667,3 +670,16 @@ class RaceManager:
             return
         for d in self.session_race_list.drivers:
             d.save_position()
+    
+    # ----------------------------
+    # LIVE TIMING EXPORT
+    # ----------------------------
+
+    def session_to_live(self) -> str:
+        return self.session.to_live_json(index=-1)
+
+    def session_to_live_dict(self) -> dict:
+        """
+        Dict ready for LiveTiming (avoids json.loads in server thread).
+        """
+        return self.session.to_live_dict(index=-1)

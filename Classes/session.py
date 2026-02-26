@@ -26,6 +26,11 @@ class SessionState(IntEnum):
     Stopped = 3
 
 
+class PitOpenState(IntEnum):
+    Closed = 0
+    Open  = 1
+    Valid = 2
+
 SESSION_NAMES = ["Free Practice", "Q - Groups", "Q - Hyperpole","R - Feature", "R - Sprint","R - Endurance"]
 
 @dataclass
@@ -43,7 +48,7 @@ class Session:
 
     # ---- runtime ----
     session_time: int = field(init=False)   # secondi rimanenti
-    pit_state: int = 0                      # 0 close, 1 open, 2 valid
+    pit_state: int = PitOpenState.Closed                      # 0 close, 1 open, 2 valid
     pit_on: bool = False                    # flag UI/logica
     sectors_on: bool = False                # settori on/off
 
@@ -130,10 +135,10 @@ class Session:
                 end = int((self.pit_open_minutes[i] + self.pit_valid_span_min) * 60)
 
                 if start <= passed <= end:
-                    self.pit_state = 2
+                    self.pit_state = PitOpenState.Valid
                     return True
 
-        self.pit_state = 1
+        self.pit_state = PitOpenState.Open
         return False
 
     # ============================================================
@@ -189,6 +194,32 @@ class Session:
             return "R - Endurance"
         return "Error"
 
+    def get_state_name(self) -> str:
+        st = int(self.session_status)
+
+        if st == int(SessionState.Starting):
+            return "Starting"
+        if st == int(SessionState.NotStarted):
+            return "Not Started"
+        if st == int(SessionState.Started):
+            return "Live"
+        if st == int(SessionState.Finished):
+            return "Finished"
+        if st == int(SessionState.Stopped):
+            return "Red Flag / Stopped"
+
+        return "Unknown"
+    
+    def get_pit_open_state(self) -> str:
+        st = int(self.pit_state)
+        
+        if st == int(PitOpenState.Open):
+            return "Open"
+        if st == int(PitOpenState.Closed):
+            return "Closed"
+        if st == int(PitOpenState.Valid):
+            return "Valid"
+        
     # ============================================================
     # POINTS (VB getPoints) - opzionale: puoi lasciarlo in RaceManager
     # ============================================================
@@ -236,9 +267,9 @@ class Session:
         """
         return {
             "sessionTime": self.session_timer_hhmmss(),
-            "sessionType": str(int(self.session_type)),
-            "sessionStatus": str(int(self.session_status)),
-            "pitOpen": self.open_pit(),
+            "sessionType": self.get_session_name(),
+            "sessionStatus": self.get_state_name(),
+            "pitOpen": self.get_pit_open_state(),
             "index": int(index),
         }
 

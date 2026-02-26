@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import List
@@ -126,9 +128,17 @@ class Roadster:
     def to_lap_timing(self):
         return self.get_actual_driver().to_lap_timing()
 
+    def to_live_dict(self) -> dict:
+        d = self.get_actual_driver()
+        base = d.to_live_dict() if hasattr(d, "to_live_dict") else json.loads(d.to_live())
+        # endurance metadata (harmless for clients that ignore it)
+        base["endurance"] = True
+        base["team"] = self.team
+        base["activeDriver"] = int(self.actual_driver)
+        return base
+
     def to_live(self) -> str:
-        return self.get_actual_driver().to_live()
+        return json.dumps(self.to_live_dict(), ensure_ascii=False, separators=(",", ":"))
 
     def to_result(self) -> str:
         return f"{self.first_driver.surname} / {self.second_driver.surname}"
-    
