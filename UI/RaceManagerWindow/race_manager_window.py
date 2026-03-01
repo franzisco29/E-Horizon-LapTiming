@@ -838,7 +838,7 @@ class RaceManagerWindow(QWidget):
             self._pos_timer.stop()
 
             # VB: PitStateLB.Text = "Pit Closed"
-            self.refs.pit_labelsetText("Pit Closed")
+            self.refs.pit_label.setText("Pit Closed")
 
             # VB: writeLapTiming
             _refresh_table()
@@ -858,7 +858,7 @@ class RaceManagerWindow(QWidget):
             self.race_man.reset_session()
 
             # VB: PitStateLB.Text = "Pit Closed"
-            self.refs.pit_labelsetText("Pit Closed")
+            self.refs.pit_label.setText("Pit Closed")
 
             # VB: StartBT.Text = "Start"
             self.refs.start_btn.setText("Start")
@@ -974,7 +974,7 @@ class RaceManagerWindow(QWidget):
         self.race_man.reset_session()
         self.refs.start_btn.setText("Start")
         self.refs.timer_value.setText("00:00")
-        self.refs.pit_labelsetText("Pit Closed")
+        self.refs.pit_label.setText("Pit Closed")
         log("Session RESET")
 
     # ------------------------------------------------------------
@@ -1314,13 +1314,13 @@ class RaceManagerWindow(QWidget):
     def _on_open_pit_clicked(self) -> None:
         if self.device_man:
             self.device_man.send_command(DeviceCommand.PIT_OPEN_CMD.value, DeviceManager.DevicesIDs.Sem)
-            self.refs.pit_labelsetText("Pit Open")
+            self.refs.pit_label.setText("Pit Open")
             log("Pit OPEN")
 
     def _on_close_pit_clicked(self) -> None:
         if self.device_man:
             self.device_man.send_command(DeviceCommand.PIT_CLOSER_CMD.value, DeviceManager.DevicesIDs.Sem)
-            self.refs.pit_labelsetText("Pit Closed")
+            self.refs.pit_label.setText("Pit Closed")
             log("Pit CLOSED")
 
     def control_pit_lane_open(self) -> None:
