@@ -574,52 +574,62 @@ class RaceManagerWindow(QWidget):
     def _update_gui_after_pass(self, lista: RaceList, idx: int, best_idx: int, swap: bool, lap_state: int) -> None:
         """
         Porting VB UpdateGUI(...)
-        - salva selezione
         - writeLapTiming
-        - setPassColor (se status ok)
-        - LiveMan.SendRaceData(drivers)
+        - setPassColor (se status ok + lap_state ok)
+        - LiveMan.SendRaceData(drivers) (solo se lap_state ok)
+        - LiveMan.SendEvent(...) (solo se lap_state ok)
         - setBestLapCell
-        - restore selection
         """
-        # writeLapTiming(laptimingview, lista)
+        # 1) writeLapTiming(laptimingview, lista)
         self.write_lap_timing(lista)
 
-           # VB: if Race_status <> 2 and < 5 then setPassColor(...)
+        # Guard: idx valido
+        if idx is None or idx < 0 or idx >= len(lista.drivers):
+            log(f"[RaceWindow] _update_gui_after_pass: invalid idx={idx} drivers={len(lista.drivers)}")
+            return
+
+        # VB: if Race_status <> 2 and < 5 then setPassColor(...)
         try:
             rs = int(getattr(lista.drivers[idx], "race_status", 0))
         except Exception:
             rs = 0
 
-        if rs != 2 and rs < 5 and lap_state>0:
+        # Consideriamo "pass valido" solo se lap_state > 0
+        pass_valid = (lap_state is not None and int(lap_state) > 0)
+
+        # 2) set_pass_color (solo se non ended e pass valido)
+        if rs != 2 and rs < 5 and pass_valid:
             try:
                 set_pass_color(self.refs.lap_table, idx, swap, best_idx, lap_state)
             except Exception as e:
                 log(f"[RaceWindow] set_pass_color ERROR: {e}")
 
-        # VB: LiveMan.SendRaceData(drivers)
-        try:
-            if self.live_man and self.live_man.enabled:
-                self.live_man.send_race_data(lista.drivers)
-        except Exception as e:
-            log(f"[RaceWindow] send_race_data ERROR: {e}")
+        # 3) Live: aggiorna lista drivers + flash evento (solo se pass valido e driver non ended)
+        if pass_valid and rs != 2 and rs < 5:
+            # VB: LiveMan.SendRaceData(drivers)
+            try:
+                if self.live_man and self.live_man.enabled:
+                    self.live_man.send_race_data(lista.drivers)
+            except Exception as e:
+                log(f"[RaceWindow] send_race_data ERROR: {e}")
 
-        # VB: if bestIdx <> idx then setBestLapCell(...)
+            # Flash evento
+            try:
+                if self.live_man and self.live_man.enabled:
+                    kind = "swap" if swap else ("pole" if idx == 0 else "passed")
+                    d = lista.drivers[idx]
+                    key = getattr(d, "number", None) or getattr(d, "driver_id", idx) or idx
+                    self.live_man.send_event(key, kind)
+            except Exception as e:
+                log(f"[RaceWindow] send_event ERROR: {e}")
+
+        # 4) setBestLapCell (anche se il pass era debounce può comunque esistere un best_idx aggiornato,
+        # ma in genere best_idx cambia su pass valido: lo lasciamo comunque come prima)
         if best_idx is not None and best_idx >= 0 and best_idx != idx:
             try:
                 set_best_lap_cell(self.refs.lap_table, best_idx)
             except Exception as e:
                 log(f"[RaceWindow] set_best_lap_cell ERROR: {e}")
-        
-        if self.live_man:
-            kind = "swap" if swap else ("pole" if idx == 0 else "passed")
-            try:
-                # chiave stabile: NUMBER (transponder)
-                d = lista.drivers[idx]
-                key = getattr(d, "number", None) or getattr(d, "driver_id", idx)
-                self.live_man.send_event(key, kind)
-            except Exception:
-                pass
-                    
     # ------------------------------------------------------------
     # Session type change & Swap -- OK DO NOT TOUCH
     # ------------------------------------------------------------
