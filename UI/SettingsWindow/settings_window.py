@@ -40,6 +40,7 @@ class SettingsWindow(QDialog):
         r.save_btn.clicked.connect(self._save)
 
         r.live_check.stateChanged.connect(self._live_toggle)
+        r.tv_tower_check.stateChanged.connect(lambda _s: None)
         r.conn_type_combo.currentIndexChanged.connect(self._conn_type_changed)
         r.debug_check.stateChanged.connect(lambda _s: None)
 
@@ -53,6 +54,7 @@ class SettingsWindow(QDialog):
 
         r.debug_check.setChecked(bool(self.settings.debug))
         r.live_check.setChecked(bool(self.settings.live_enabled))
+        r.tv_tower_check.setChecked(bool(self.settings.tv_enabled))
 
         # Monitor list
         r.monitor_combo.clear()
@@ -96,6 +98,7 @@ class SettingsWindow(QDialog):
             r.debounce_edit.setEnabled(False)
             r.root_path_edit.setEnabled(False)
             r.browse_btn.setEnabled(False)
+            r.tv_tower_check.setEnabled(False)
 
     # -------------------------
     # UI reactions
@@ -182,6 +185,7 @@ class SettingsWindow(QDialog):
 
         self.settings.live_ip = r.live_ip_edit.text().strip() or "127.0.0.1"
         self.settings.live_port = live_port
+        self.settings.tv_enabled = bool(r.tv_tower_check.isChecked())
 
         new_root = r.root_path_edit.text().strip()
         if new_root:

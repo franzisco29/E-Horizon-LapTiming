@@ -160,7 +160,7 @@ class DebugWindow(QDialog):
         self.ui.clear_rows()
 
         def callback_factory(device: int, number: int):
-            log(f"[DebugWindow] callback_factory(device={device}, number={number})")
+            #log(f"[DebugWindow] callback_factory(device={device}, number={number})")
 
             def handler():
                 log(f"[DebugWindow] CLICK -> device={device} number={number}")
@@ -183,7 +183,7 @@ class DebugWindow(QDialog):
                 label = self._find_driver_label_by_number(int(number))
                 self.ui.add_row(label, int(number), callback_factory)
 
-            log("[DebugWindow] create_rows() end (normal)")
+            #log("[DebugWindow] create_rows() end (normal)")
             return
 
         # ----------------

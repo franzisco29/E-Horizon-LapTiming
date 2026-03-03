@@ -8,6 +8,7 @@ from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidgetItem, QAbstractItemView, QHeaderView
 
 from Modules.log_utils import log
+from Modules.net import get_local_ipv4
 
 from UI.RaceManagerWindow.race_manager_window_ui import build_race_manager_ui, RaceManagerWindowRefs
 from UI.StatusWindow.status_window import StatusWindow
@@ -318,6 +319,8 @@ class RaceManagerWindow(QWidget):
         conn_type = int(getattr(getattr(self.settings, "devices", None), "connection_type", 0))
         flags_raw = str(getattr(getattr(self.settings, "devices", None), "device_available", "1,1,1,1,1,1"))
         active_flags = self._parse_active_flags(flags_raw)
+
+        log(f"[RaceWindow] DeviceManager config: IP={ip} PORT={tcp_port} ConnType={conn_type} Flags={active_flags}")
 
         self.device_man = DeviceManager(ip, tcp_port, conn_type, active_flags)
         self.device_man.on_log = self._cb_log
@@ -1519,15 +1522,10 @@ class RaceManagerWindow(QWidget):
         return flags[:6]
 
     def _get_local_ip_best_effort(self) -> str:
-        import socket
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception:
-            return "0.0.0.0"
+        """Ottiene l'IP locale della LAN usando get_local_ipv4() da net.py"""
+        ip = get_local_ipv4()
+        log(f"[LocalIP] Detected: {ip}")
+        return ip if ip != "IP non trovato" else "0.0.0.0"
 
     def closeEvent(self, event) -> None:
         log("RaceManagerWindow closing...")

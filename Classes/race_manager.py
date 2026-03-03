@@ -369,11 +369,11 @@ class RaceManager:
 
             elif device == int(DevicesIDs.PitIn):
                 driver.in_pit(self.race)
-                self._calculate_delta()
+                #self._calculate_delta()
 
             elif device == int(DevicesIDs.PitOut):
                 driver.out_lap(self.session.sectors_on, self.race)
-                self._calculate_delta()
+                #self._calculate_delta()
 
             # Applica logica di fine gara (time-certain / session-finished) dopo sorting/delta
             self._apply_finish_on_central(number)

@@ -13,6 +13,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from Modules.log_utils import log
+
 
 EVENT_COLOR_MAP: Dict[str, str] = {
     "passed": "#E6C202",
@@ -160,8 +162,8 @@ class LiveTimingManager:
         async def index() -> HTMLResponse:
             return HTMLResponse(self._html_page())
 
-        @app.get("/assets/logo.webp")
-        async def logo() -> JSONResponse | FileResponse:
+        @app.get("/assets/logo.webp", response_model=None)
+        async def logo() -> Any:
             if not self.root_path:
                 return JSONResponse(status_code=404, content={})
 
@@ -250,13 +252,18 @@ tr.row:nth-child(even) {{ background: rgba(255,255,255,.02); }}
       <table>
         <thead>
           <tr>
-            <th>#</th>
+            <th>Pos</th>
             <th>Pilota</th>
             <th>Team</th>
-            <th>Ultimo giro</th>
+            <th>S1</th>
+            <th>S2</th>
+            <th>S3</th>
+            <th>Best</th>
+            <th>Laps</th>
+            <th>Status</th>
             <th>Gap</th>
-            <th>Intervallo</th>
-            <th>Stato</th>
+            <th>Int</th>
+            <th>Last</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -286,10 +293,15 @@ function render(drivers) {{
       <td>${{d.position ?? ''}}</td>
       <td>${{d.name ?? ''}}</td>
       <td>${{d.team ?? ''}}</td>
-      <td>${{d.lastLap ?? ''}}</td>
+      <td>${{d.s1 ?? ''}}</td>
+      <td>${{d.s2 ?? ''}}</td>
+      <td>${{d.s3 ?? ''}}</td>
+      <td>${{d.best ?? ''}}</td>
+      <td>${{d.laps ?? ''}}</td>
+      <td><span class="badge">${{d.status ?? ''}}</span></td>
       <td>${{d.gap ?? ''}}</td>
       <td>${{d.interval ?? ''}}</td>
-      <td><span class="badge">${{d.status ?? ''}}</span></td>
+      <td>${{d.lastLap ?? ''}}</td>
     </tr>`).join("");
 
   state.rows.clear();
@@ -357,6 +369,13 @@ boot();
         self._server_web = uvicorn.Server(
             uvicorn.Config(self.app_web, host=self.address, port=self.port + 1, log_level="warning")
         )
+
+        # log reachable URLs for data and web endpoints
+        try:
+            log(f"[LiveTiming] DATA server listening at http://{self.address}:{self.port}")
+            log(f"[LiveTiming] WEB page available at http://{self.address}:{self.port + 1}")
+        except Exception:
+            pass
 
         self.enabled = True
         asyncio.create_task(self._server_data.serve())

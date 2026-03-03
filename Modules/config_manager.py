@@ -76,7 +76,8 @@ class DevicesConfig:
 
 @dataclass
 class LiveConfig:
-    enabled: bool = True
+    timing_enabled: bool = True
+    tv_enabled: bool = False
     ip: str = "127.0.0.1"
     port: int = 8888
 
@@ -174,11 +175,27 @@ class Settings:
 
     @property
     def live_enabled(self) -> bool:
-        return self.live.enabled
+        return self.live.timing_enabled
 
     @live_enabled.setter
     def live_enabled(self, value: bool) -> None:
-        self.live.enabled = bool(value)
+        self.live.timing_enabled = bool(value)
+
+    @property
+    def timing_enabled(self) -> bool:
+        return self.live.timing_enabled
+
+    @timing_enabled.setter
+    def timing_enabled(self, value: bool) -> None:
+        self.live.timing_enabled = bool(value)
+
+    @property
+    def tv_enabled(self) -> bool:
+        return self.live.tv_enabled
+
+    @tv_enabled.setter
+    def tv_enabled(self, value: bool) -> None:
+        self.live.tv_enabled = bool(value)
 
     @property
     def live_ip(self) -> str:
@@ -218,7 +235,7 @@ class Settings:
             # paths.root_path verrà impostato al primo avvio su <base>/Settings
             timing=TimingConfig(debounce_ms=3000),
             devices=DevicesConfig(connection_type=0, tcp_port=20777, device_available="1,0,0,0,0,0"),
-            live=LiveConfig(enabled=True, ip="127.0.0.1", port=8888),
+            live=LiveConfig(timing_enabled=True, tv_enabled=False, ip="127.0.0.1", port=8888),
             ui=UIConfig(monitor_out=0),
         )
 
@@ -251,7 +268,14 @@ class Settings:
         cfg.devices.tcp_port = int(data.get("devices", {}).get("tcp_port", cfg.devices.tcp_port))
         cfg.devices.device_available = str(data.get("devices", {}).get("device_available", cfg.devices.device_available))
 
-        cfg.live.enabled = bool(data.get("live", {}).get("enabled", cfg.live.enabled))
+        # compatibility: support several possible key names for the new flags
+        live_section = data.get("live", {}) or {}
+        cfg.live.timing_enabled = bool(
+            live_section.get("timing_enabled", live_section.get("Timing_enabled", live_section.get("enabled", cfg.live.timing_enabled)))
+        )
+        cfg.live.tv_enabled = bool(
+            live_section.get("tv_enabled", live_section.get("tv_Enabled", cfg.live.tv_enabled))
+        )
         cfg.live.ip = str(data.get("live", {}).get("ip", cfg.live.ip))
         cfg.live.port = int(data.get("live", {}).get("port", cfg.live.port))
 
@@ -283,7 +307,8 @@ class Settings:
                 "device_available": self.devices.device_available,
             },
             "live": {
-                "enabled": self.live.enabled,
+                "timing_enabled": self.live.timing_enabled,
+                "tv_enabled": self.live.tv_enabled,
                 "ip": self.live.ip,
                 "port": self.live.port,
             },

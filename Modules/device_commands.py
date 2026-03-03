@@ -11,6 +11,10 @@ class DeviceCommand(str, Enum):
     CONN_CMD = "C"
     DSCN_CMD = "c"
     FAN_CMD = "W"
+    
+    # Backwards-compatible aliases (older code uses these names)
+    CONN = CONN_CMD
+    DSCN = DSCN_CMD
 
     # CMD FOR START
     START_PROC_CMD = "s"
@@ -47,6 +51,7 @@ class DeviceCommand(str, Enum):
     FORMATION_LAP_CMD = "L"
 
     STATUS_CMD = "A"
+    STATUS = STATUS_CMD
 
 
 def cmd(c: DeviceCommand) -> bytes:

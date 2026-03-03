@@ -29,6 +29,8 @@ class GlassCard(QFrame):
 class SettingsWindowUIRefs:
     debug_check: QCheckBox
     live_check: QCheckBox
+    tv_check: QCheckBox
+    tv_tower_check: QCheckBox
     monitor_combo: QComboBox
     conn_type_combo: QComboBox
     debounce_edit: QLineEdit
@@ -55,7 +57,7 @@ class SettingsWindowUI(QWidget):
         super().__init__(parent)
         self.setObjectName("SettingsWindowUI")
         self.setWindowTitle("E-Horizon • Settings")
-        self.setMinimumSize(980, 560)
+        self.setMinimumSize(1200, 680)
 
         self.setStyleSheet("""
             QWidget#SettingsWindowUI {
@@ -193,9 +195,8 @@ class SettingsWindowUI(QWidget):
         left.setSpacing(12)
         left.setAlignment(Qt.AlignTop)  # FIX: no compression madness
 
-        # ---- General card (GRID + min height) ----
+        # ---- General card ----
         general = GlassCard(self, radius=22)
-        general.setMinimumHeight(210)  # FIX: evita “schiacciamento” e overlapping
         gl = QGridLayout(general)
         gl.setContentsMargins(18, 16, 18, 18)
         gl.setHorizontalSpacing(14)
@@ -211,8 +212,13 @@ class SettingsWindowUI(QWidget):
 
         debug_check = QCheckBox("Debug")
         live_check = QCheckBox("Live Timing")
-        gl.addWidget(debug_check, 1, 0, 1, 2)
-        gl.addWidget(live_check, 2, 0, 1, 2)
+        tv_check = QCheckBox("Tv Tower")
+
+        # place LiveTiming to the left of Debug (side-by-side)
+        gl.addWidget(live_check, 1, 0)
+        gl.addWidget(debug_check, 1, 1)
+        # Tv Tower on next row, spanning both columns
+        gl.addWidget(tv_check, 2, 0, 1, 2)
 
         lab_mon = QLabel("Monitor Out")
         lab_mon.setObjectName("FieldLabel")
@@ -234,17 +240,10 @@ class SettingsWindowUI(QWidget):
         gl.addWidget(debounce_edit, 5, 1)
 
         gl.setRowStretch(6, 1)
-        
-        
+
         monitor_combo.setMinimumWidth(260)
         conn_type_combo.setMinimumWidth(260)
         debounce_edit.setMinimumWidth(260)
-
-        # se vedi ancora “vuoto” e vuoi compattare:
-        general.setMinimumHeight(0)     # <-- rimuove la forzatura
-        general.setSizePolicy(general.sizePolicy().horizontalPolicy(), general.sizePolicy().verticalPolicy())
-        gl.setRowStretch(6, 1)          # tiene stabile, ma non crea “aria” eccessiva
-        
 
         left.addWidget(general)
 
@@ -309,6 +308,7 @@ class SettingsWindowUI(QWidget):
         fl.addWidget(hpath_host, 1, 1)
 
         left.addWidget(folder)
+        left.addStretch(1)
 
         # RIGHT column (TCP)
         tcp_card = GlassCard(self, radius=22)
@@ -358,6 +358,8 @@ class SettingsWindowUI(QWidget):
         self.refs = SettingsWindowUIRefs(
             debug_check=debug_check,
             live_check=live_check,
+            tv_check=tv_check,
+            tv_tower_check=tv_check,
             monitor_combo=monitor_combo,
             conn_type_combo=conn_type_combo,
             debounce_edit=debounce_edit,

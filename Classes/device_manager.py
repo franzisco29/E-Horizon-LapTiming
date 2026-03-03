@@ -164,6 +164,7 @@ class DeviceManager:
     # -------------------------
     def start(self) -> None:
         self._log("START", "start() called")
+        self._log("START", f"DeviceManager config: ip={self.ip}, port={self.port}, conn_type={self.conn_type.name}")
 
         if self.conn_type == ConnectionTypes.NONE:
             self._log("START", "ConnectionTypes.NONE -> server not started")
@@ -177,6 +178,8 @@ class DeviceManager:
             self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
+            self._log("START", f"⚠️ IMPORTANT: Server will listen on 0.0.0.0:{self.port} (all interfaces)")
+            self._log("START", f"⚠️ Connect to: {self.ip}:{self.port} from external device")
             self._log("START", f"Binding 0.0.0.0:{self.port}")
             self._server_sock.bind(("0.0.0.0", self.port))
 

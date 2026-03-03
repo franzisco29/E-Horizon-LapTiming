@@ -147,7 +147,7 @@ class Driver:
     def out_lap(self, sect: bool, race: bool) -> None:
         new_time = datetime.now()
         self.sort_time = new_time
-
+        self.race_time = new_time
         if race:
             if self.pit_enter_time is None:
                 self.pit_times.append(timedelta(0))
