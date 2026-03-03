@@ -47,7 +47,6 @@ class DeviceManager:
     - Server TCP che accetta fino a MAX_DEVICES
     - Handshake: invia CONN_CMD, aspetta risposta "C:D1IPx.x.x.x"
     - Per ogni device: thread di ricezione line-based
-    - Ping STATUS periodico per rilevare inattività/disconnessioni
 
     Callback:
         on_transponder_received(device_id: str, transponder_id: int)      # legacy ("D0")
@@ -102,12 +101,10 @@ class DeviceManager:
         port: int = 20777,
         conn_type: Union[int, ConnectionTypes] = ConnectionTypes.TCP,
         active_flags: Optional[Sequence[bool]] = None,
-        ping_interval_s: float = 4.0,
-        status_timeout_s: float = 10.0,
         handshake_delay_ms: int = 250,
-        # debug: timeouts per evitare blocchi "muti"
-        accept_timeout_s: float = 1.0,
-        client_socket_timeout_s: float = 2.0,
+        # debug: timeouts per evitare blocchi "muti"; None -> no timeout
+        accept_timeout_s: Optional[float] = None,
+        client_socket_timeout_s: Optional[float] = None,
     ) -> None:
         self.ip = ip
         self.port = port
@@ -137,24 +134,15 @@ class DeviceManager:
         self.on_transponder_received_index: Optional[Callable[[int, int], None]] = None  # NEW
         self.on_log: Optional[Callable[[str], None]] = None
 
-        self._ping_interval_s = float(ping_interval_s)
-        self._status_timeout_s = float(status_timeout_s)
         self._handshake_delay_s = max(0.0, handshake_delay_ms / 1000.0)
-
-        self._ping_timer: Optional[threading.Timer] = None
-
-        self._accept_timeout_s = float(accept_timeout_s)
-        self._client_socket_timeout_s = float(client_socket_timeout_s)
+        self._accept_timeout_s = None if accept_timeout_s is None else float(accept_timeout_s)
+        self._client_socket_timeout_s = None if client_socket_timeout_s is None else float(client_socket_timeout_s)
 
         self._log("INIT", f"DeviceManager created ip={ip} port={port} conn_type={self.conn_type.name}")
         self._log("INIT", f"MAX_DEVICES={self.MAX_DEVICES} DEVICE_NAMES={list(self.DEVICE_NAMES)}")
         self._log("INIT", f"active_flags={self.active_flags}")
-        self._log("INIT", f"ping_interval_s={self._ping_interval_s} status_timeout_s={self._status_timeout_s} handshake_delay_s={self._handshake_delay_s}")
-        self._log("INIT", f"accept_timeout_s={self._accept_timeout_s} client_socket_timeout_s={self._client_socket_timeout_s}")
-
-        self._last_required_ok: Optional[bool] = None
-        self._last_missing_required: Optional[str] = None
-        self._last_status_hash: Optional[int] = None
+        self._log("INIT", f"handshake_delay_s={self._handshake_delay_s}")
+        self._log("INIT", f"accept_timeout_s={self._accept_timeout_s} client_socket_timeout_s={self._client_socket_timeout_s} (None means no timeout)")
 
         if self.conn_type == ConnectionTypes.TCP:
             self.start()
@@ -184,7 +172,8 @@ class DeviceManager:
             self._server_sock.bind(("0.0.0.0", self.port))
 
             self._server_sock.listen(20)
-            self._server_sock.settimeout(self._accept_timeout_s)
+            if self._accept_timeout_s is not None:
+                self._server_sock.settimeout(self._accept_timeout_s)
 
             self._is_running = True
             self._log("START", f"Server listening on port {self.port}")
@@ -197,9 +186,6 @@ class DeviceManager:
             self._accept_thread.start()
             self._log("START", "Accept loop thread started")
 
-            self._start_ping_timer()
-            self._log("START", "Ping timer started")
-
         except Exception as ex:
             self._log("ERROR", f"start() failed: {ex}")
 
@@ -207,7 +193,6 @@ class DeviceManager:
         self._log("STOP", "disconnect_all() called")
 
         self._is_running = False
-        self._stop_ping_timer()
 
         with self._lock:
             self._log("STOP", f"Closing {len(self._devices)} device(s)")
@@ -254,7 +239,8 @@ class DeviceManager:
                 self._log("ACCEPT", f"Client connected from {addr}")
 
                 # timeout per evitare blocchi su recv/readline
-                client_sock.settimeout(self._client_socket_timeout_s)
+                if self._client_socket_timeout_s is not None:
+                    client_sock.settimeout(self._client_socket_timeout_s)
 
                 rfile = client_sock.makefile("r", encoding="ascii", newline="\n")
                 wfile = client_sock.makefile("w", encoding="ascii", newline="\n")
@@ -299,7 +285,6 @@ class DeviceManager:
                         _rfile=rfile,
                         _wfile=wfile,
                     )
-                    dev.last_status_response = datetime.now()
                     self._devices[device_id] = dev
 
                 self._log("ACCEPT", f"Registered device {device_id}")
@@ -314,7 +299,9 @@ class DeviceManager:
                 self._log("ACCEPT", f"RX thread started for {device_id}")
 
             except socket.timeout:
-                continue
+                # if using a timeout, loop again; otherwise this block won't be hit
+                if self._accept_timeout_s is not None:
+                    continue
             except OSError as ex:
                 self._log("ACCEPT", f"OSError (likely stop): {ex}")
                 break
@@ -361,9 +348,9 @@ class DeviceManager:
                     # legacy callback: ("D0", 22)
                     if self.on_transponder_received:
                         try:
-                            self._log("CALLBACK", f"Calling on_transponder_received({device_id}, {transponder})")
+                            #self._log("CALLBACK", f"Calling on_transponder_received({device_id}, {transponder})")
                             self.on_transponder_received(device_id, transponder)
-                            self._log("CALLBACK", "Callback OK")
+                            #self._log("CALLBACK", "Callback OK")
                         except Exception as ex:
                             self._log("CALLBACK", f"Callback error: {ex}")
 
@@ -375,10 +362,6 @@ class DeviceManager:
                             self._log("CALLBACK", "Callback index OK")
                         except Exception as ex:
                             self._log("CALLBACK", f"Callback index error: {ex}")
-
-                elif line.startswith("S:"):
-                    dev.last_status_response = datetime.now()
-                    self._log("STATUS", f"{dev.device_id}: status updated -> {line}")
 
                 else:
                     self._log("RX", f"{dev.device_id}: unhandled frame '{line}'")
@@ -432,86 +415,8 @@ class DeviceManager:
                     self._log("BROADCAST", f"{dev.device_id}: send error: {ex}")
 
     # -------------------------
-    # Status / Ping
-    # -------------------------
-    def _start_ping_timer(self) -> None:
-        self._stop_ping_timer()
-
-        def tick():
-            if not self._is_running:
-                self._log("PING", "tick() but not running -> stop")
-                return
-            try:
-                self._log("PING", "tick() -> ping_devices()")
-                self.ping_devices()
-            except Exception as ex:
-                self._log("PING", f"tick() error: {ex}")
-            finally:
-                self._ping_timer = threading.Timer(self._ping_interval_s, tick)
-                self._ping_timer.daemon = True
-                self._ping_timer.start()
-
-        self._ping_timer = threading.Timer(self._ping_interval_s, tick)
-        self._ping_timer.daemon = True
-        self._ping_timer.start()
-
-        self._log("PING", "Ping timer armed")
-
-    def _stop_ping_timer(self) -> None:
-        if self._ping_timer is not None:
-            try:
-                self._ping_timer.cancel()
-                self._log("PING", "Ping timer stopped")
-            except Exception as ex:
-                self._log("PING", f"Ping timer cancel error: {ex}")
-            self._ping_timer = None
-
-    def ping_devices(self) -> None:
-        now = datetime.now()
-
-        with self._lock:
-            self._log("PING", f"Ping cycle start. Connected={list(self._devices.keys())}")
-            to_remove: List[str] = []
-
-            for dev_id, dev in list(self._devices.items()):
-                try:
-                    dev.send_line(DeviceCommand.STATUS.value)
-                    seconds = (now - dev.last_status_response).total_seconds()
-                    self._log("PING", f"{dev_id}: STATUS sent, last_response_age={seconds:.2f}s")
-
-                    if seconds > self._status_timeout_s:
-                        self._log("PING", f"{dev_id}: TIMEOUT > {self._status_timeout_s}s")
-                        to_remove.append(dev_id)
-
-                except Exception as ex:
-                    self._log("PING", f"{dev_id}: ping error: {ex}")
-                    to_remove.append(dev_id)
-
-            for dev_id in to_remove:
-                dev = self._devices.get(dev_id)
-                if dev:
-                    try:
-                        dev.close()
-                    except Exception as ex:
-                        self._log("PING", f"{dev_id}: close error: {ex}")
-
-                self._devices.pop(dev_id, None)
-                self._log("PING", f"{dev_id} removed")
-
-            self._log("PING", "Ping cycle end")
-
-    # -------------------------
     # Info / Checks (VB port)
     # -------------------------
-    def print_status(self) -> None:
-        self._log("INFO", "===== STATO DEVICE MANAGER =====")
-        with self._lock:
-            for i in range(self.MAX_DEVICES):
-                dev_id = f"D{i}"
-                connected = "Connesso" if dev_id in self._devices else "Non connesso"
-                attivo = "SI" if i < len(self.active_flags) and self.active_flags[i] else "NO"
-                self._log("INFO", f"Device {dev_id} | Attivo: {attivo} | Stato: {connected}")
-
     def check_sectors_devices(self) -> bool:
         ok = len(self.active_flags) > 2 and self.active_flags[1] and self.active_flags[2]
         self.sectors_on = bool(ok)
@@ -523,32 +428,6 @@ class DeviceManager:
         self.pit_on = bool(ok)
         self._log("CHECK", f"check_pit_devices -> {ok}")
         return ok
-
-    def get_device_status_list(self) -> List[str]:
-        status_list: List[str] = []
-
-        with self._lock:
-            for i, name in enumerate(self.DEVICE_NAMES):
-                if i >= len(self.active_flags) or not self.active_flags[i]:
-                    status_list.append(f"Device ID {i} - {name} - Non attivato dall'utente")
-                    continue
-
-                dev_id = f"D{i}"
-                if self.conn_type != ConnectionTypes.NONE:
-                    if dev_id in self._devices:
-                        ip = self._devices[dev_id].ip
-                        status_list.append(f"Device ID {i} - {name} - Connesso da IP {ip}")
-                    else:
-                        status_list.append(f"Device ID {i} - {name} - In attesa di connessione...")
-                else:
-                    status_list.append(f"Device ID {i} - {name} - Connesso")
-
-        h = hash(tuple(status_list))
-        if self._last_status_hash != h:
-            self._log("INFO", f"get_device_status_list changed -> {status_list}")
-            self._last_status_hash = h
-
-        return status_list
 
     def all_required_devices_connected(self) -> bool:
         if self.conn_type == ConnectionTypes.NONE:
@@ -564,15 +443,7 @@ class DeviceManager:
                         break
 
         ok = missing is None
-
-        if (self._last_required_ok != ok) or (self._last_missing_required != missing):
-            if ok:
-                self._log("CHECK", "all_required_devices_connected -> True")
-            else:
-                self._log("CHECK", f"all_required_devices_connected -> False (missing {missing})")
-            self._last_required_ok = ok
-            self._last_missing_required = missing
-
+        self._log("CHECK", f"all_required_devices_connected -> {ok} (missing={missing})")
         return ok
 
     # -------------------------
@@ -601,3 +472,23 @@ class DeviceManager:
                 log(f"{datetime.now().isoformat(timespec='milliseconds')} | [LOG] on_log callback error: {ex}")
 
         log(line)
+    
+    def get_device_status_list(self) -> list[str]:
+        """
+        Restituisce una lista dello stato dei device:
+        - Connesso (ONLINE) se il device ha completato l'handshake
+        - Non connesso (OFFLINE) se ancora non collegato
+        Compatibile con l'uso in _startup_win.update_status()
+        """
+        with self._lock:
+            status_list = []
+            for i, name in enumerate(self.DEVICE_NAMES):
+                dev_id = f"D{i}"
+                if i >= len(self.active_flags) or not self.active_flags[i]:
+                    status_list.append(f"Device ID {i} - {name} - Non attivato dall'utente")
+                elif dev_id in self._devices:
+                    ip = self._devices[dev_id].ip
+                    status_list.append(f"Device ID {i} - {name} - Connesso da IP {ip}")
+                else:
+                    status_list.append(f"Device ID {i} - {name} - In attesa di connessione...")
+            return status_list

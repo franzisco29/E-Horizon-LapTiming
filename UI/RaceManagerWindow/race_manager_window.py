@@ -42,6 +42,7 @@ import traceback
 
 import time
 from time import perf_counter #to see
+import threading
 
 
 
@@ -1527,6 +1528,31 @@ class RaceManagerWindow(QWidget):
         log(f"[LocalIP] Detected: {ip}")
         return ip if ip != "IP non trovato" else "0.0.0.0"
 
+    def _shutdown_devices_async(self) -> None:
+        """Helper run in background to broadcast DSCN and then disconnect.
+
+        This keeps the UI thread responsive during window closing, avoiding
+        hangs if sockets block.
+        """
+        if not self.device_man:
+            return
+        try:
+            if self.device_man.conn_type == ConnectionTypes.TCP:
+                try:
+                    self.device_man.broadcast(DeviceCommand.DSCN_CMD.value)
+                    log("DeviceManager: broadcast DSCN_CMD before shutdown (threaded)")
+                except Exception as exc:
+                    log(f"[RaceWindow] async broadcast DSCN_CMD error: {exc}")
+        except Exception:
+            # ignore if device_man mutated concurrently
+            pass
+
+        try:
+            self.device_man.disconnect_all()
+            log("DeviceManager disconnected (threaded)")
+        except Exception as exc:
+            log(f"[RaceWindow] async DeviceManager disconnect error: {exc}")
+
     def closeEvent(self, event) -> None:
         log("RaceManagerWindow closing...")
 
@@ -1543,12 +1569,9 @@ class RaceManagerWindow(QWidget):
         except Exception as e:
             log(f"[RaceWindow] LiveTiming stop error: {e}")
 
-        try:
-            if self.device_man:
-                self.device_man.disconnect_all()
-                log("DeviceManager disconnected")
-        except Exception as e:
-            log(f"[RaceWindow] DeviceManager disconnect error: {e}")
+        # perform device shutdown in a separate thread to prevent blocking
+        if self.device_man:
+            threading.Thread(target=self._shutdown_devices_async, daemon=True).start()
 
         super().closeEvent(event)
         
