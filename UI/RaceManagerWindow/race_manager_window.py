@@ -1027,7 +1027,7 @@ class RaceManagerWindow(QWidget):
 
             if all_ended:
                 try:
-                    self.session_timer.stop()
+                    self._ses_timer.stop()
                 except Exception:
                     pass
 
@@ -1054,6 +1054,13 @@ class RaceManagerWindow(QWidget):
                     self.live_man.send_session_info(rm)
             except Exception:
                 pass
+
+            # Invia anche i dati finali dei piloti alla pagina web
+            try:
+                if self.live_man and self.live_man.enabled and self.session_race_list:
+                    self.live_man.send_race_data(self.session_race_list.drivers)
+            except Exception as e:
+                log(f"[RaceWindow] send_race_data (finish) ERROR: {e}")
 
             return
 
