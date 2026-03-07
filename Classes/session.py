@@ -24,6 +24,7 @@ class SessionState(IntEnum):
     Started = 1
     Finished = 2
     Stopped = 3
+    FormationLap = 4
 
 
 class PitOpenState(IntEnum):
@@ -158,13 +159,13 @@ class Session:
         - se PreRaceTime <= soglia => command = Commands(i)
         """
         commands = [
-            DeviceCommands.PRE10_CMD,
-            DeviceCommands.PRE5_CMD,
-            DeviceCommands.PRE2_CMD,
-            DeviceCommands.PRE1_CMD,
-            DeviceCommands.FORMATION_LAP_CMD,
+            DeviceCommand.PRE10_CMD,
+            DeviceCommand.PRE5_CMD,
+            DeviceCommand.PRE2_CMD,
+            DeviceCommand.PRE1_CMD,
+            DeviceCommand.FORMATION_LAP_CMD,
         ]
-        cmd = DeviceCommands.PRE_RACE_CMD
+        cmd = DeviceCommand.PRE_RACE_CMD
 
         for i in range(len(self.light_down_pre_race_time)):
             if self.pre_race_time <= self.light_down_pre_race_time[i]:

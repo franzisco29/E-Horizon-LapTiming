@@ -793,7 +793,7 @@ class RaceManagerWindow(QWidget):
             # VB: lista = raceMan.SessionRaceList + writeLapTiming
             _refresh_table()
 
-            # VB: DeviceMan.Broadcast(DeviceCommands.START_CMD)
+            # VB: DeviceMan.Broadcast(DeviceCommand.START_CMD)
             self.device_man.broadcast(DeviceCommand.START_CMD.value)
 
             # VB: posTimer.Start()
@@ -847,7 +847,7 @@ class RaceManagerWindow(QWidget):
             # VB: writeLapTiming
             _refresh_table()
 
-            # VB: DeviceMan.Broadcast(DeviceCommands.RED_FLAG_CMD)
+            # VB: DeviceMan.Broadcast(DeviceCommand.RED_FLAG_CMD)
             self.device_man.broadcast(DeviceCommand.RED_FLAG_CMD.value)
 
             log("Session STOPPED")
@@ -887,7 +887,7 @@ class RaceManagerWindow(QWidget):
         # STARTING  (VB Starting)  -> pre-race semaforo / start procedure
         # ------------------------------------------------------------
         elif act_state == SessionState.Starting:
-            # VB: DeviceMan.SendCommand(DeviceCommands.START_PROC_CMD, Sem)
+            # VB: DeviceMan.SendCommand(DeviceCommand.START_PROC_CMD, Sem)
             # Nel tuo DeviceCommand non vedo START_PROC: se esiste con altro nome, mappalo.
 
             self.device_man.send_command(DeviceCommand.START_PROC_CMD.value, DeviceManager.DevicesIDs.Sem)  # type: ignore
