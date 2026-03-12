@@ -3,17 +3,17 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QGroupBox, QLabel, QPushButton, QComboBox, QFrame,
+    QGroupBox, QLabel, QPushButton, QComboBox,
     QSizePolicy, QTableWidget, QSpacerItem
 )
 
 @dataclass(slots=True)
 class RaceManagerWindowRefs:
     timer_value: QLabel
+    sc_time_value: QLabel
     session_value: QLabel
     pit_label: QLabel
     track_value: QLabel
-    track_panel: QFrame
     ip_label: QLabel
     racelist_box: QComboBox
     session_box: QComboBox
@@ -21,6 +21,7 @@ class RaceManagerWindowRefs:
     start_btn: QPushButton
     reset_btn: QPushButton
     save_results_btn: QPushButton
+    live_btn: QPushButton
     debug_btn: QPushButton
     pre_race_minutes_box: QComboBox
     pre_race_btn: QPushButton
@@ -61,8 +62,8 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         QGroupBox {
             border: 1px solid rgba(255,255,255,0.15);
             border-radius: 8px;
-            margin-top: 10px;
-            padding: 10px;
+            margin-top: 8px;
+            padding: 8px;
             background: rgba(255,255,255,0.02);
         }
         QGroupBox::title {
@@ -74,8 +75,8 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
             background: rgba(255,255,255,0.08);
             border: 1px solid rgba(255,255,255,0.15);
             border-radius: 4px;
-            padding: 4px 8px;
-            min-height: 20px;
+            padding: 3px 7px;
+            min-height: 18px;
         }
         QPushButton:hover { background: rgba(255,255,255,0.15); }
         QTableWidget { background: #232629; border-radius: 4px; }
@@ -83,69 +84,53 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     """)
 
     main_layout = QVBoxLayout(root)
+    main_layout.setSpacing(6)
     top_layout = QHBoxLayout()
+    top_layout.setSpacing(8)
 
     # --- SESSION INFO ---
     gb_info = QGroupBox("Session Info")
     gl_info = QGridLayout(gb_info)
-    gl_info.setVerticalSpacing(14)
-    gl_info.setContentsMargins(10, 10, 10, 10)
+    gl_info.setVerticalSpacing(6)
+    gl_info.setContentsMargins(8, 8, 8, 8)
     
     timer_val = QLabel("00:00")
+    sc_time_val = QLabel("00:00")
     session_val = QLabel("Practice")
     pit_val = QLabel("Pit Closed")
     track_val = QLabel("—")
-    track_panel = QFrame()
-    track_panel.setFixedSize(60, 60)
-    track_panel.setStyleSheet("background: #333; border-radius: 5px;")
 
     gl_info.addWidget(QLabel("Tempo:"), 0, 0)
     gl_info.addWidget(timer_val, 0, 1)
-    gl_info.addWidget(QLabel("Sessione:"), 1, 0)
-    gl_info.addWidget(session_val, 1, 1)
-    gl_info.addWidget(QLabel("Pit:"), 2, 0)
-    gl_info.addWidget(pit_val, 2, 1)
-    gl_info.addWidget(track_panel, 0, 2, 3, 1)
-    
-    gl_info.addWidget(QLabel("Track:"), 3, 0)
-    gl_info.addWidget(track_val, 3, 1)
-    gl_info.addWidget(track_panel, 0, 2, 4, 1)  # <- diventa 4 righe
+    gl_info.addWidget(QLabel("SC Tempo:"), 1, 0)
+    gl_info.addWidget(sc_time_val, 1, 1)
+    gl_info.addWidget(QLabel("Sessione:"), 2, 0)
+    gl_info.addWidget(session_val, 2, 1)
+    gl_info.addWidget(QLabel("Pit:"), 3, 0)
+    gl_info.addWidget(pit_val, 3, 1)
+    gl_info.addWidget(QLabel("Track:"), 4, 0)
+    gl_info.addWidget(track_val, 4, 1)
 
     # --- DIRECTION CONTROL ---
     gb_dir = QGroupBox("Direction Control")
-    gl_dir = QGridLayout(gb_dir)
-    gl_dir.setHorizontalSpacing(18)
-
-    # Spaziature: più aria tra righe e tra colonne
-    gl_dir.setContentsMargins(12, 18, 12, 14)
-    gl_dir.setVerticalSpacing(25)     # <-- più spazio verticale tra righe
-
-    # Colonne: diamo regole chiare
-    # 0 label, 1 campo principale (stretch), 2 btn, 3 label, 4 combo, 5 btn
-    gl_dir.setColumnMinimumWidth(0, 42)
-    gl_dir.setColumnStretch(1, 1)         # combo/lista prende spazio
-    gl_dir.setColumnMinimumWidth(2, 86)   # debug
-    gl_dir.setColumnMinimumWidth(3, 70)   # "Pre Gara:", "Set State:"
-    gl_dir.setColumnMinimumWidth(4, 110)  # combo minutes / status
-    gl_dir.setColumnMinimumWidth(5, 100)  # bottoni a destra
-
-    # Riga minima (anti-collasso)
-    for r in range(4):
-        gl_dir.setRowMinimumHeight(r, 30)
+    dir_layout = QVBoxLayout(gb_dir)
+    dir_layout.setContentsMargins(8, 8, 8, 8)
+    dir_layout.setSpacing(6)
 
     ip_lbl = QLabel("IP:")
     ip_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
     ip_val = QLabel("NONE")
     ip_val.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 
-    debug_btn = _btn("Debug", 90)
+    live_btn = _btn("Live", 74)
+    debug_btn = _btn("Debug", 92)
 
     pre_lbl = QLabel("Pre Gara:")
     pre_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
     pre_minutes = QComboBox()
     pre_minutes.addItems(["1", "2", "3", "5", "10"])
     pre_minutes.setMinimumWidth(110)
-    pre_btn = _btn("Start", 90)
+    pre_btn = _btn("Start Pre", 110)
 
     list_lbl = QLabel("Lista:")
     list_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
@@ -165,72 +150,102 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     state_lbl = QLabel("Set State:")
     state_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
     status_box = QComboBox()
-    status_box.addItems([ "DNF", "DSQ","DNS"])
+    status_box.addItems(["DNF", "DSQ", "DNS"])
     status_box.setMinimumWidth(110)
     apply_status_btn = _btn("Set State", 90)
 
-    # ✅ Riga 0: IP | Debug | Pre Gara
-    gl_dir.addWidget(ip_lbl,      0, 0, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(ip_val,      0, 1, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(debug_btn,   0, 2, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(pre_lbl,     0, 3, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(pre_minutes, 0, 4, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(pre_btn,     0, 5, alignment=Qt.AlignVCenter)
+    # Sotto-groupbox 1: strumenti e pre-gara
+    gb_dir_service = QGroupBox("Service")
+    gl_dir_service = QGridLayout(gb_dir_service)
+    gl_dir_service.setContentsMargins(8, 8, 8, 8)
+    gl_dir_service.setHorizontalSpacing(10)
+    gl_dir_service.setVerticalSpacing(6)
+    gl_dir_service.setColumnStretch(1, 1)
+    gl_dir_service.setRowMinimumHeight(0, 30)
 
-    # ✅ Riga 1: Lista | Carica
-    gl_dir.addWidget(list_lbl,     1, 0, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(racelist_box, 1, 1, 1, 4)  # spanning
-    gl_dir.addWidget(load_btn,     1, 5, alignment=Qt.AlignVCenter)
+    top_btns = QWidget(gb_dir_service)
+    top_btns_lay = QHBoxLayout(top_btns)
+    top_btns_lay.setContentsMargins(0, 0, 0, 0)
+    top_btns_lay.setSpacing(8)
+    top_btns_lay.addWidget(live_btn)
+    top_btns_lay.addWidget(debug_btn)
 
-    # ✅ Riga 2: Sessione | Start Reset Generate (allineati)
-    gl_dir.addWidget(sess_lbl,     2, 0, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(session_box,  2, 1, 1, 2)  # spanning per dare aria
-    gl_dir.addWidget(start_btn,    2, 3, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(reset_btn,    2, 4, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(save_btn,     2, 5, alignment=Qt.AlignVCenter)
+    gl_dir_service.addWidget(ip_lbl,      0, 0, alignment=Qt.AlignVCenter)
+    gl_dir_service.addWidget(ip_val,      0, 1, alignment=Qt.AlignVCenter)
+    gl_dir_service.addWidget(top_btns,    0, 2, alignment=Qt.AlignVCenter)
+    gl_dir_service.addWidget(pre_lbl,     0, 3, alignment=Qt.AlignVCenter)
+    gl_dir_service.addWidget(pre_minutes, 0, 4, alignment=Qt.AlignVCenter)
+    gl_dir_service.addWidget(pre_btn,     0, 5, alignment=Qt.AlignVCenter)
 
-    # ✅ Riga 3: Set State | combo | bottone
-    gl_dir.addWidget(state_lbl,        3, 3, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(status_box,       3, 4, alignment=Qt.AlignVCenter)
-    gl_dir.addWidget(apply_status_btn, 3, 5, alignment=Qt.AlignVCenter)
+    # Sotto-groupbox 2: sessione/lista/stato
+    gb_dir_session = QGroupBox("Session")
+    gl_dir_session = QGridLayout(gb_dir_session)
+    gl_dir_session.setContentsMargins(8, 8, 8, 8)
+    gl_dir_session.setHorizontalSpacing(10)
+    gl_dir_session.setVerticalSpacing(6)
+    gl_dir_session.setColumnStretch(1, 1)
+    gl_dir_session.setRowMinimumHeight(0, 30)
+    gl_dir_session.setRowMinimumHeight(1, 30)
+    gl_dir_session.setRowMinimumHeight(2, 30)
+
+    gl_dir_session.addWidget(list_lbl,     0, 0, alignment=Qt.AlignVCenter)
+    gl_dir_session.addWidget(racelist_box, 0, 1, 1, 4)
+    gl_dir_session.addWidget(load_btn,     0, 5, alignment=Qt.AlignVCenter)
+
+    gl_dir_session.addWidget(sess_lbl,     1, 0, alignment=Qt.AlignVCenter)
+    gl_dir_session.addWidget(session_box,  1, 1, 1, 2)
+    gl_dir_session.addWidget(start_btn,    1, 3, alignment=Qt.AlignVCenter)
+    gl_dir_session.addWidget(reset_btn,    1, 4, alignment=Qt.AlignVCenter)
+    gl_dir_session.addWidget(save_btn,     1, 5, alignment=Qt.AlignVCenter)
+
+    gl_dir_session.addWidget(state_lbl,         2, 3, alignment=Qt.AlignVCenter)
+    gl_dir_session.addWidget(status_box,        2, 4, alignment=Qt.AlignVCenter)
+    gl_dir_session.addWidget(apply_status_btn,  2, 5, alignment=Qt.AlignVCenter)
+
+    dir_layout.addWidget(gb_dir_service)
+    dir_layout.addWidget(gb_dir_session)
 
     # --- FLAG CONTROL ---
     gb_flag = QGroupBox("Flag Control")
     gl_flag = QGridLayout(gb_flag)
-    gl_flag.setContentsMargins(10, 16, 10, 12)
-    gl_flag.setVerticalSpacing(14)
-    gl_flag.setHorizontalSpacing(12)
+    gl_flag.setContentsMargins(6, 8, 6, 8)
+    gl_flag.setVerticalSpacing(6)
+    gl_flag.setHorizontalSpacing(6)
     
     flags = {
-        "YS1": (0,0), "YS2": (0,1), "YS3": (0,2), "SC": (0,3), "F Lap": (0,4), "OP Pit": (0,5),
-        "Green": (1,0), "Red": (1,1), "Clear": (1,2), "VSC": (1,3), "Wet R": (1,4), "CL Pit": (1,5)
+        "YS1": (0, 0), "YS2": (0, 1), "YS3": (0, 2),
+        "SC": (1, 0), "VSC": (1, 1), "F Lap": (1, 2),
+        "Green": (2, 0), "Red": (2, 1), "Clear": (2, 2),
+        "Wet R": (3, 0), "OP Pit": (3, 1), "CL Pit": (3, 2),
     }
     btns = {}
     for text, pos in flags.items():
-        btn = _btn(text, 65)
+        btn = _btn(text, 54)
         btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         gl_flag.addWidget(btn, pos[0], pos[1])
         btns[text] = btn
 
     # --- IMPOSTAZIONI ALTEZZA E POLICY ---
     # Invece di fixed height, usiamo minimum height
-    gb_info.setMinimumHeight(200)
-    gb_dir.setMinimumHeight(200)
-    gb_flag.setMinimumHeight(200)
+    gb_info.setMinimumHeight(0)
+    gb_dir.setMinimumHeight(0)
+    gb_flag.setMinimumHeight(0)
+    gb_info.setMaximumWidth(260)
+    gb_flag.setMaximumWidth(360)
     
     # Impedisce ai box di crescere verticalmente all'infinito
     gb_info.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
     gb_dir.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     gb_flag.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
-    top_layout.addWidget(gb_info)
-    top_layout.addWidget(gb_dir, 2)
-    top_layout.addWidget(gb_flag)
+    top_layout.addWidget(gb_info, 1)
+    top_layout.addWidget(gb_dir, 3)
+    top_layout.addWidget(gb_flag, 1)
     
     main_layout.addLayout(top_layout)
 
     # Padding prima della tabella
-    main_layout.addSpacerItem(QSpacerItem(0, 10, QSizePolicy.Minimum, QSizePolicy.Fixed))
+    main_layout.addSpacerItem(QSpacerItem(0, 4, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
     # --- TABLE ---
     table = QTableWidget(0, 13)
@@ -240,10 +255,10 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
 
     refs = RaceManagerWindowRefs(
         timer_value           = timer_val,
+        sc_time_value         = sc_time_val,
         session_value         = session_val,
         pit_label             = pit_val,
         track_value           = track_val,
-        track_panel           = track_panel,
         ip_label              = ip_val,
 
         racelist_box          = racelist_box,
@@ -252,6 +267,7 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         start_btn             = start_btn,
         reset_btn             = reset_btn,
         save_results_btn      = save_btn,
+        live_btn              = live_btn,
         debug_btn             = debug_btn,
 
         pre_race_minutes_box  = pre_minutes,

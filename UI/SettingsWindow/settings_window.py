@@ -55,6 +55,7 @@ class SettingsWindow(QDialog):
         r.debug_check.setChecked(bool(self.settings.debug))
         r.live_check.setChecked(bool(self.settings.live_enabled))
         r.tv_tower_check.setChecked(bool(self.settings.tv_enabled))
+        r.live_public_check.setChecked(bool(getattr(self.settings, "live_public_enabled", False)))
 
         # Monitor list
         r.monitor_combo.clear()
@@ -99,6 +100,7 @@ class SettingsWindow(QDialog):
             r.root_path_edit.setEnabled(False)
             r.browse_btn.setEnabled(False)
             r.tv_tower_check.setEnabled(False)
+            r.live_public_check.setEnabled(False)
 
     # -------------------------
     # UI reactions
@@ -186,6 +188,7 @@ class SettingsWindow(QDialog):
         self.settings.live_ip = r.live_ip_edit.text().strip() or "127.0.0.1"
         self.settings.live_port = live_port
         self.settings.tv_enabled = bool(r.tv_tower_check.isChecked())
+        self.settings.live_public_enabled = bool(r.live_public_check.isChecked())
 
         new_root = r.root_path_edit.text().strip()
         if new_root:

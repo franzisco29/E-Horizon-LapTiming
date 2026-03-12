@@ -185,7 +185,7 @@ class Driver:
     def fst_lap_to_res(self, endurance: bool) -> str:
         if endurance:
             return f"{self.team}: {fmt_mm_ss_mmm(self.fast_lap)}"
-        return f"{self.name_surname_for_result()}: {fmt_mm_ss_mmm(self.fast_lap)}"
+        return f"{self.name_surname()}: {fmt_mm_ss_mmm(self.fast_lap)}"
 
     def _sector_to_string(self, idx: int) -> str:
         t = self.sectors[idx]

@@ -78,6 +78,7 @@ class DevicesConfig:
 class LiveConfig:
     timing_enabled: bool = True
     tv_enabled: bool = False
+    public_enabled: bool = False
     ip: str = "127.0.0.1"
     port: int = 8888
 
@@ -198,6 +199,14 @@ class Settings:
         self.live.tv_enabled = bool(value)
 
     @property
+    def live_public_enabled(self) -> bool:
+        return self.live.public_enabled
+
+    @live_public_enabled.setter
+    def live_public_enabled(self, value: bool) -> None:
+        self.live.public_enabled = bool(value)
+
+    @property
     def live_ip(self) -> str:
         return self.live.ip
 
@@ -235,7 +244,7 @@ class Settings:
             # paths.root_path verrà impostato al primo avvio su <base>/Settings
             timing=TimingConfig(debounce_ms=3000),
             devices=DevicesConfig(connection_type=0, tcp_port=20777, device_available="1,0,0,0,0,0"),
-            live=LiveConfig(timing_enabled=True, tv_enabled=False, ip="127.0.0.1", port=8888),
+            live=LiveConfig(timing_enabled=True, tv_enabled=False, public_enabled=False, ip="127.0.0.1", port=8888),
             ui=UIConfig(monitor_out=0),
         )
 
@@ -276,6 +285,9 @@ class Settings:
         cfg.live.tv_enabled = bool(
             live_section.get("tv_enabled", live_section.get("tv_Enabled", cfg.live.tv_enabled))
         )
+        cfg.live.public_enabled = bool(
+            live_section.get("public_enabled", live_section.get("ngrok_public_enabled", cfg.live.public_enabled))
+        )
         cfg.live.ip = str(data.get("live", {}).get("ip", cfg.live.ip))
         cfg.live.port = int(data.get("live", {}).get("port", cfg.live.port))
 
@@ -309,6 +321,7 @@ class Settings:
             "live": {
                 "timing_enabled": self.live.timing_enabled,
                 "tv_enabled": self.live.tv_enabled,
+                "public_enabled": self.live.public_enabled,
                 "ip": self.live.ip,
                 "port": self.live.port,
             },

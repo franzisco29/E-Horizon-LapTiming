@@ -14,9 +14,36 @@ from reportlab.lib.units import mm
 # ----------------------------
 # Helpers formatting
 # ----------------------------
-def fmt_mm_ss_mmm(td: timedelta) -> str:
-    if td is None:
-        return ""
+def _coerce_timedelta(value: Any, driver: Any = None) -> timedelta:
+    """Convert runtime timing values to a duration.
+
+    Driver fields may be either timedelta (durations) or datetime timestamps.
+    """
+    if value is None:
+        return timedelta(0)
+
+    if isinstance(value, timedelta):
+        return value
+
+    if isinstance(value, datetime):
+        start = getattr(driver, "start_time", None) if driver is not None else None
+        if isinstance(start, datetime):
+            dt = value - start
+            if dt.total_seconds() >= 0:
+                return dt
+        return timedelta(0)
+
+    if isinstance(value, (int, float)):
+        try:
+            return timedelta(seconds=float(value))
+        except Exception:
+            return timedelta(0)
+
+    return timedelta(0)
+
+
+def fmt_mm_ss_mmm(value: Any, driver: Any = None) -> str:
+    td = _coerce_timedelta(value, driver=driver)
     total_ms = int(td.total_seconds() * 1000)
     if total_ms < 0:
         total_ms = 0
@@ -26,10 +53,9 @@ def fmt_mm_ss_mmm(td: timedelta) -> str:
     return f"{minutes:02d}:{seconds:02d}.{millis:03d}"
 
 
-def fmt_m_ss_mmm(td: timedelta) -> str:
+def fmt_m_ss_mmm(value: Any, driver: Any = None) -> str:
     # per lap history usa m:ss.fff
-    if td is None:
-        return ""
+    td = _coerce_timedelta(value, driver=driver)
     total_ms = int(td.total_seconds() * 1000)
     if total_ms < 0:
         total_ms = 0
@@ -132,11 +158,10 @@ class ResultManager:
             c.drawString(x[3], y, str(drv.laps))
 
             if self.race_man.race:
-                # TIME = race_time in VB (mm:ss.fff)
-                c.drawString(x[4], y, fmt_mm_ss_mmm(drv.race_time))
+                c.drawString(x[4], y, fmt_mm_ss_mmm(self._driver_total_time(drv), driver=drv))
             else:
-                # in qualy: TIME column swapped with FASTEST
-                c.drawString(x[7], y, fmt_mm_ss_mmm(drv.fast_lap))
+                # In non-race, column 4 is FASTEST after header swap.
+                c.drawString(x[4], y, fmt_mm_ss_mmm(drv.fast_lap))
 
             c.drawString(x[5], y, drv.print_delta(False))
             c.drawString(x[6], y, drv.print_delta(True))
@@ -144,7 +169,8 @@ class ResultManager:
             if self.race_man.race:
                 c.drawString(x[7], y, fmt_mm_ss_mmm(drv.fast_lap))
             else:
-                c.drawString(x[4], y, fmt_mm_ss_mmm(drv.race_time))
+                # In non-race, column 7 is TIME after header swap.
+                c.drawString(x[7], y, fmt_mm_ss_mmm(self._driver_total_time(drv), driver=drv))
 
             best = bool(self.race_man.race and best_lap_drv and best_lap_drv.number == drv.number)
             pts = self.race_man.get_points(drv.position, best)
@@ -173,62 +199,17 @@ class ResultManager:
             )
             y -= 12 * mm
 
-        # Pit stops section
-        if self.race_man.race:
-            if y < 70 * mm:
-                c.showPage()
-                y = page_h - 20 * mm
-
-            c.setFont("Helvetica-Bold", 11)
-            c.drawCentredString(x[0] + table_w / 2, y, "PIT STOPS")
-            y -= 10 * mm
-
-            pit_headers = ["POS", "DRIVER", "TEAM", "PIT TIME"]
-            pit_w = [10 * mm, 48 * mm, 34 * mm, 20 * mm]
-            pit_x = self._centered_x_positions(page_w, pit_w)
-
-            c.setFont("Helvetica", 8.5)
-            for i, h in enumerate(pit_headers):
-                c.drawString(pit_x[i], y, h)
-            y -= 6 * mm
-
-            # order pit times
-            for d in drivers:
-                d.order_pit_times()
-
-            drivers_by_pit = sorted(drivers, key=lambda d: d.pit_times[0] if d.pit_times else timedelta.max)
-
-            posi = 1
-            for drv in drivers_by_pit:
-                best_pit = drv.pit_times[0] if drv.pit_times else timedelta.max
-                if best_pit == timedelta.max:
-                    continue
-
-                if y < 25 * mm:
-                    c.showPage()
-                    y = page_h - 20 * mm
-
-                c.drawString(pit_x[0], y, str(posi))
-
-                if getattr(self.race_man, "endurance", False):
-                    roadsters = getattr(self.race_man.session_race_list, "roadsters", None) or []
-                    idx = next((r for r in roadsters if drv.number in r.numbers), None)
-                    name_txt = idx.to_result() if idx else drv.name_surname()
-                else:
-                    name_txt = drv.name_surname()
-
-                c.drawString(pit_x[1], y, name_txt)
-                c.drawString(pit_x[2], y, self._shorten_team_name(drv.team))
-                c.drawString(pit_x[3], y, fmt_mm_ss_mmm(best_pit))
-
-                y -= 6 * mm
-                posi += 1
-
         # Footer
         date_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         c.setFont("Helvetica", 7)
         c.drawString(15 * mm, 12 * mm, "Approved by General Director E-Horizon Francesco Troianiello")
         c.drawRightString(page_w - 15 * mm, 12 * mm, date_str)
+
+        self._add_lap_history_pages(c, page_w, page_h, drivers)
+
+        # Dedicated pit log pages (chronological) only if pit system is enabled.
+        if self._pit_log_enabled():
+            self._add_pit_log_pages(c, page_w, page_h, drivers)
 
         c.save()
 
@@ -242,84 +223,12 @@ class ResultManager:
         VB: GenerateLapHistoryPDF()
         """
         drivers = list(self.race_man.session_race_list.drivers)
-        max_pilots_per_page = 6
 
         doc_path = Path(root_path) / f"LapHistory_{datetime.now():%Y%m%d_%H%M%S}.pdf"
         c = canvas.Canvas(str(doc_path), pagesize=A4)
         page_w, page_h = A4
 
-        all_drivers = sorted(drivers, key=lambda d: d.number)
-        max_laps = max((len(d.lap_history) for d in all_drivers), default=0)
-
-        pages = (len(all_drivers) + max_pilots_per_page - 1) // max_pilots_per_page
-
-        for page_index in range(pages):
-            y = page_h - 20 * mm
-            y = self._draw_logo_centered(c, page_w, y, max_w=35 * mm, max_h=35 * mm)
-
-            c.setFont("Helvetica-Bold", 16)
-            c.drawCentredString(page_w / 2, page_h - 55 * mm, "Lap History Report")
-
-            c.setFont("Helvetica-Bold", 11)
-            c.drawString(15 * mm, page_h - 70 * mm, f"Sessione: {self._get_session_name()}")
-            c.drawRightString(page_w - 15 * mm, page_h - 70 * mm, f"Data: {datetime.now():%d/%m/%Y %H:%M}")
-
-            margin_left = 15 * mm
-            margin_top = page_h - 90 * mm
-            col_w = 22 * mm
-            col_spacing = 3 * mm
-            row_h = 7 * mm
-
-            drivers_this_page = all_drivers[page_index * max_pilots_per_page:(page_index + 1) * max_pilots_per_page]
-
-            best_laps = []
-            for d in drivers_this_page:
-                best_laps.append(min(d.lap_history) if d.lap_history else timedelta.max)
-
-            # Header row
-            col_x = margin_left
-            c.setFont("Helvetica-Bold", 10)
-            c.drawCentredString(col_x + col_w / 2, margin_top, "Lap")
-            col_x += col_w + col_spacing
-
-            for d in drivers_this_page:
-                c.drawCentredString(col_x + col_w / 2, margin_top, f"Car N.{d.race_number:02d}")
-                col_x += col_w + col_spacing
-
-            # Rows
-            y_row = margin_top - row_h
-            for lap_index in range(max_laps):
-                if y_row < 20 * mm:
-                    break
-
-                col_x = margin_left
-                c.setFont("Helvetica", 9.5)
-                c.drawCentredString(col_x + col_w / 2, y_row, str(lap_index + 1))
-                col_x += col_w + col_spacing
-
-                for i, d in enumerate(drivers_this_page):
-                    lap_str = ""
-                    font_name = "Helvetica"
-                    font_size = 9.5
-
-                    if len(d.lap_history) > lap_index:
-                        t = d.lap_history[lap_index]
-                        lap_str = fmt_m_ss_mmm(t)
-                        if t == best_laps[i]:
-                            font_name = "Helvetica-Bold"
-
-                    c.setFont(font_name, font_size)
-                    c.drawCentredString(col_x + col_w / 2, y_row, lap_str)
-                    col_x += col_w + col_spacing
-
-                y_row -= row_h
-
-            # Footer
-            c.setFont("Helvetica", 9)
-            c.drawString(15 * mm, 12 * mm, "Approvato dal Direttore Generale E-Horizon Francesco Troianiello")
-            c.drawRightString(page_w - 15 * mm, 12 * mm, datetime.now().strftime("%d/%m/%Y %H:%M"))
-
-            c.showPage()
+        self._add_lap_history_pages(c, page_w, page_h, drivers)
 
         c.save()
         return doc_path
@@ -354,7 +263,7 @@ class ResultManager:
             driver_data["history"] = [fmt_mm_ss_mmm(ts) for ts in d.lap_history]
             driver_data["bestLap"] = fmt_mm_ss_mmm(d.fast_lap)
             driver_data["position"] = d.position
-            driver_data["totalTime"] = fmt_mm_ss_mmm(d.time_on_track)
+            driver_data["totalTime"] = fmt_mm_ss_mmm(self._driver_total_time(d), driver=d)
             driver_data["interval"] = d.print_delta(True)
             driver_data["leader"] = d.print_delta(False)
             driver_data["entryPitTimes"] = [fmt_mm_ss_mmm(ts) for ts in d.pit_in_times]
@@ -384,6 +293,194 @@ class ResultManager:
         if not name:
             return ""
         return (name[:15] + "…") if len(name) > 16 else name
+
+    def _driver_total_time(self, driver: Any) -> timedelta:
+        """Best-effort total race time for exports.
+
+        Prefer explicit duration if available, otherwise derive from race_time/start_time.
+        """
+        total = _coerce_timedelta(getattr(driver, "time_on_track", None), driver=driver)
+        if total.total_seconds() > 0:
+            return total
+        return _coerce_timedelta(getattr(driver, "race_time", None), driver=driver)
+
+    def _pit_log_enabled(self) -> bool:
+        session = getattr(self.race_man, "session", None)
+        return bool(getattr(self.race_man, "race", False) and getattr(session, "pit_on", False))
+
+    def _add_lap_history_pages(self, c: canvas.Canvas, page_w: float, page_h: float, drivers: List[Any]) -> None:
+        all_drivers = sorted(drivers, key=lambda d: d.number)
+        if not all_drivers:
+            return
+
+        drivers_per_page = 5
+        margin_x = 15 * mm
+        lap_col_w = 18 * mm
+        row_h = 6.5 * mm
+        usable_w = page_w - (2 * margin_x)
+
+        pages = (len(all_drivers) + drivers_per_page - 1) // drivers_per_page
+
+        def draw_page_header() -> float:
+            y = page_h - 18 * mm
+            y = self._draw_logo_centered(c, page_w, y, max_w=25 * mm, max_h=25 * mm)
+
+            c.setFont("Helvetica-Bold", 15)
+            c.drawCentredString(page_w / 2, y, f"{self.event_name} - LAP HISTORY")
+            y -= 7 * mm
+
+            c.setFont("Helvetica", 9)
+            c.drawCentredString(page_w / 2, y, f"{self._get_session_name()} | {datetime.now():%d/%m/%Y %H:%M}")
+            return y - 10 * mm
+
+        for page_index in range(pages):
+            c.showPage()
+            y = draw_page_header()
+
+            drivers_this_page = all_drivers[page_index * drivers_per_page:(page_index + 1) * drivers_per_page]
+            driver_count = len(drivers_this_page)
+            if driver_count == 0:
+                continue
+
+            best_laps = [min(d.lap_history) if d.lap_history else timedelta.max for d in drivers_this_page]
+            max_laps = max((len(d.lap_history) for d in drivers_this_page), default=0)
+            driver_col_w = (usable_w - lap_col_w) / driver_count
+
+            table_x = margin_x
+            table_y_top = y
+            total_rows = max_laps + 1
+            table_h = total_rows * row_h
+            table_y_bottom = table_y_top - table_h
+
+            c.setLineWidth(0.5)
+
+            # Outer border
+            c.rect(table_x, table_y_bottom, usable_w, table_h, stroke=1, fill=0)
+
+            # Vertical grid lines
+            c.line(table_x + lap_col_w, table_y_bottom, table_x + lap_col_w, table_y_top)
+            for idx in range(1, driver_count):
+                xpos = table_x + lap_col_w + (idx * driver_col_w)
+                c.line(xpos, table_y_bottom, xpos, table_y_top)
+
+            # Horizontal grid lines
+            for row_idx in range(1, total_rows):
+                ypos = table_y_top - (row_idx * row_h)
+                c.line(table_x, ypos, table_x + usable_w, ypos)
+
+            # Header row
+            header_y = table_y_top - (row_h * 0.72)
+            c.setFont("Helvetica-Bold", 8.5)
+            c.drawCentredString(table_x + (lap_col_w / 2), header_y, "LAP")
+            for idx, drv in enumerate(drivers_this_page):
+                cell_x = table_x + lap_col_w + (idx * driver_col_w)
+                c.drawCentredString(cell_x + (driver_col_w / 2), header_y, self._lap_history_driver_label(drv))
+
+            current_y = table_y_top - row_h - (row_h * 0.72)
+            for lap_index in range(max_laps):
+                c.setFont("Helvetica", 8.3)
+                c.drawCentredString(table_x + (lap_col_w / 2), current_y, str(lap_index + 1))
+
+                for drv_idx, drv in enumerate(drivers_this_page):
+                    lap_str = ""
+                    font_name = "Helvetica"
+                    if lap_index < len(drv.lap_history):
+                        lap_time = drv.lap_history[lap_index]
+                        lap_str = fmt_m_ss_mmm(lap_time)
+                        if lap_time == best_laps[drv_idx]:
+                            font_name = "Helvetica-Bold"
+
+                    c.setFont(font_name, 8.3)
+                    cell_x = table_x + lap_col_w + (drv_idx * driver_col_w)
+                    c.drawCentredString(cell_x + (driver_col_w / 2), current_y, lap_str)
+
+                current_y -= row_h
+
+            c.setFont("Helvetica", 7)
+            c.drawString(15 * mm, 12 * mm, "Approved by General Director E-Horizon Francesco Troianiello")
+            c.drawRightString(page_w - 15 * mm, 12 * mm, datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+
+    def _driver_display_name(self, drv: Any) -> str:
+        if getattr(self.race_man, "endurance", False):
+            roadsters = getattr(self.race_man.session_race_list, "roadsters", None) or []
+            rd = next((r for r in roadsters if drv.number in r.numbers), None)
+            return rd.to_result() if rd else drv.name_surname()
+        return drv.name_surname()
+
+    def _lap_history_driver_label(self, drv: Any) -> str:
+        surname = str(getattr(drv, "surname", "")).strip()
+        race_number = int(getattr(drv, "race_number", 0) or 0)
+        if surname:
+            return f"#{race_number:02d} {surname}"
+        return f"#{race_number:02d}"
+
+    def _collect_pit_events(self, drivers: List[Any]) -> List[Dict[str, Any]]:
+        events: List[Dict[str, Any]] = []
+
+        for drv in drivers:
+            entries = list(getattr(drv, "pit_in_times", []) or [])
+            durations = list(getattr(drv, "pit_times", []) or [])
+
+            for idx, entry in enumerate(entries):
+                entry_td = _coerce_timedelta(entry, driver=drv)
+                pit_td = _coerce_timedelta(durations[idx], driver=drv) if idx < len(durations) else timedelta(0)
+
+                events.append(
+                    {
+                        "entry": entry_td,
+                        "driver": self._driver_display_name(drv),
+                        "team": self._shorten_team_name(getattr(drv, "team", "")),
+                        "pit_time": pit_td,
+                    }
+                )
+
+        events.sort(key=lambda e: e["entry"])
+        return events
+
+    def _add_pit_log_pages(self, c: canvas.Canvas, page_w: float, page_h: float, drivers: List[Any]) -> None:
+        events = self._collect_pit_events(drivers)
+        if not events:
+            return
+
+        col_w = [14 * mm, 26 * mm, 58 * mm, 40 * mm, 28 * mm]
+        x = self._centered_x_positions(page_w, col_w)
+        headers = ["#", "PIT IN", "DRIVER", "TEAM", "PIT TIME"]
+
+        def draw_header(y_val: float) -> float:
+            y_logo = self._draw_logo_centered(c, page_w, y_val, max_w=25 * mm, max_h=25 * mm)
+            c.setFont("Helvetica-Bold", 14)
+            c.drawCentredString(page_w / 2, y_logo, f"{self.event_name} - PIT LOG")
+            y_logo -= 7 * mm
+
+            c.setFont("Helvetica", 9)
+            c.drawCentredString(page_w / 2, y_logo, f"{self._get_session_name()} | {datetime.now():%d/%m/%Y %H:%M}")
+            y_logo -= 10 * mm
+
+            c.setFont("Helvetica-Bold", 8.5)
+            for i, h in enumerate(headers):
+                c.drawString(x[i], y_logo, h)
+            return y_logo - 6 * mm
+
+        c.showPage()
+        y = draw_header(page_h - 20 * mm)
+
+        c.setFont("Helvetica", 8.5)
+        for idx, ev in enumerate(events, start=1):
+            if y < 20 * mm:
+                c.showPage()
+                y = draw_header(page_h - 20 * mm)
+                c.setFont("Helvetica", 8.5)
+
+            c.drawString(x[0], y, str(idx))
+            c.drawString(x[1], y, fmt_mm_ss_mmm(ev["entry"]))
+            c.drawString(x[2], y, str(ev["driver"]))
+            c.drawString(x[3], y, str(ev["team"]))
+            c.drawString(x[4], y, fmt_mm_ss_mmm(ev["pit_time"]))
+            y -= 6 * mm
+
+        c.setFont("Helvetica", 7)
+        c.drawString(15 * mm, 12 * mm, "Approved by General Director E-Horizon Francesco Troianiello")
+        c.drawRightString(page_w - 15 * mm, 12 * mm, datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
 
     def _centered_x_positions(self, page_w: float, col_w: List[float]) -> List[float]:
         total = sum(col_w)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot, QEvent
@@ -32,6 +34,7 @@ from Classes.live_timing_hub import LiveTimingManager
 from Classes.driver import Driver
 from Classes.race_list import RaceList
 from Classes.race_manager import RaceManager
+from Classes.result_manager import ResultManager
 from Classes.session import SessionState, SESSION_NAMES
 from Modules.enums import RaceState
 from Classes.roadster import Roadster
@@ -39,6 +42,7 @@ from Classes.roadster import Roadster
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 
 import traceback
+import webbrowser
 
 import time
 from time import perf_counter #to see
@@ -89,6 +93,10 @@ class RaceManagerWindow(QWidget):
 
         # State
         self.yellows = [False, False, False]
+        self.sc_active = False
+        self.vsc_active = False
+        self.sc_elapsed_sec = 0
+        self.sc_compensation_sec = 0
         self.red_flag_out = False
         self.old_cmd: str = DeviceCommand.CLC_CMD.value
         self.old_pre_cmd: str = DeviceCommand.PRE_RACE_CMD.value
@@ -126,8 +134,13 @@ class RaceManagerWindow(QWidget):
         self._old_endurance = endurance
         
         self._apply_debug_visibility()
+        self._setup_yellow_toggle_ui()
+        self._refresh_sc_time_label()
         self._enable_idle_state()
         log("RaceManagerWindow: init() done")
+
+    def _refresh_sc_time_label(self) -> None:
+        self.refs.sc_time_value.setText(self._format_mmss(int(getattr(self, "sc_elapsed_sec", 0) or 0)))
 
     # ------------------------------------------------------------
     # UI/table setup -- OK DO NOT TOUCH
@@ -188,6 +201,7 @@ class RaceManagerWindow(QWidget):
         r.start_btn.clicked.connect(self._on_start_clicked)
         r.reset_btn.clicked.connect(self._on_reset_clicked)
         r.save_results_btn.clicked.connect(self._on_save_results_clicked)
+        r.live_btn.clicked.connect(self._on_open_live_clicked)
         r.debug_btn.clicked.connect(self._on_debug_clicked)
 
         r.pre_race_btn.clicked.connect(self._on_pre_race_clicked)
@@ -208,6 +222,59 @@ class RaceManagerWindow(QWidget):
         r.cl_pit_btn.clicked.connect(self._on_close_pit_clicked)
 
         r.session_box.currentIndexChanged.connect(self._on_session_type_changed)
+
+    def _setup_yellow_toggle_ui(self) -> None:
+        yellow_style = (
+            "QPushButton:checked {"
+            "background-color: #f0c419;"
+            "color: #111111;"
+            "border: 2px solid #8a6d00;"
+            "font-weight: 700;"
+            "}"
+        )
+
+        sc_style = (
+            "QPushButton:checked {"
+            "background-color: #58a6ff;"
+            "color: #0b1220;"
+            "border: 2px solid #1f6feb;"
+            "font-weight: 700;"
+            "}"
+        )
+
+        vsc_style = (
+            "QPushButton:checked {"
+            "background-color: #ff9f1a;"
+            "color: #111111;"
+            "border: 2px solid #b36b00;"
+            "font-weight: 700;"
+            "}"
+        )
+
+        for btn in (self.refs.ys1_btn, self.refs.ys2_btn, self.refs.ys3_btn):
+            btn.setCheckable(True)
+            btn.setStyleSheet(yellow_style)
+
+        self.refs.sc_btn.setCheckable(True)
+        self.refs.sc_btn.setStyleSheet(sc_style)
+        self.refs.vsc_btn.setCheckable(True)
+        self.refs.vsc_btn.setStyleSheet(vsc_style)
+
+        self._refresh_flag_buttons_ui()
+
+    def _refresh_flag_buttons_ui(self) -> None:
+        for idx, btn in enumerate((self.refs.ys1_btn, self.refs.ys2_btn, self.refs.ys3_btn)):
+            btn.blockSignals(True)
+            btn.setChecked(bool(self.yellows[idx]))
+            btn.blockSignals(False)
+
+        self.refs.sc_btn.blockSignals(True)
+        self.refs.sc_btn.setChecked(bool(self.sc_active))
+        self.refs.sc_btn.blockSignals(False)
+
+        self.refs.vsc_btn.blockSignals(True)
+        self.refs.vsc_btn.setChecked(bool(self.vsc_active))
+        self.refs.vsc_btn.blockSignals(False)
 
     # ------------------------------------------------------------
     # DB -- OK DO NOT TOUCH
@@ -302,15 +369,25 @@ class RaceManagerWindow(QWidget):
         self.race_man.logger = log
 
         self.live_man = None
+        self.refs.live_btn.setEnabled(bool(self.settings.live_enabled))
 
         if self.settings.live_enabled:
             live_ip = self.settings.live_ip
             live_port = self.settings.live_port
+            live_public_enabled = bool(getattr(self.settings, "live_public_enabled", False))
 
-            self.live_man = LiveTimingManager(live_ip, live_port, root_path=self.settings.root_path)
+            self.live_man = LiveTimingManager(
+                live_ip,
+                live_port,
+                root_path=self.settings.root_path,
+                public_enabled=live_public_enabled,
+            )
             self.live_man.start()
 
-            log(f"[RaceWindow] LiveTiming started on {live_ip}:{live_port} (WEB on {live_port + 1})")
+            log(
+                f"[RaceWindow] LiveTiming started on {live_ip}:{live_port} "
+                f"(WEB same port, public={'on' if live_public_enabled else 'off'})"
+            )
         else:
             log("[RaceWindow] LiveTiming disabled by settings")
 
@@ -393,6 +470,10 @@ class RaceManagerWindow(QWidget):
 
         self.race_man.session_race_list = self.session_race_list
         self.write_lap_timing(self.session_race_list)
+
+        self.sc_elapsed_sec = 0
+        self.sc_compensation_sec = 0
+        self._refresh_sc_time_label()
 
         # enable like VB
         self.refs.start_btn.setEnabled(True)
@@ -765,6 +846,10 @@ class RaceManagerWindow(QWidget):
             # VB: raceMan.StartSession()
             self.race_man.start_session()
 
+            self.sc_elapsed_sec = 0
+            self.sc_compensation_sec = 0
+            self._refresh_sc_time_label()
+
             # VB: StartBT.Text = "Stop"
             self.refs.start_btn.setText("Stop")
 
@@ -826,9 +911,9 @@ class RaceManagerWindow(QWidget):
             if sess_type > 0:
                 self._ses_timer.stop()
 
-            # VB: If Not redFlagOut Then ControlPitLaneOpen()
-            # Nel Python non vedo ControlPitLaneOpen(): metto TODO se non esiste.
-            if not self.red_flag_out:
+            # In practice (session_type=0) avoid pit-lane sync on STOP.
+            # It generates extra CLC/PIT commands that can mask RED on devices.
+            if sess_type > 0 and not self.red_flag_out:
                 if hasattr(self, "control_pit_lane_open"):
                     try:
                         self.control_pit_lane_open()
@@ -972,14 +1057,91 @@ class RaceManagerWindow(QWidget):
     def _on_reset_clicked(self) -> None:
         if not self.race_man:
             return
+
+        rm = self.race_man
+
+        # Stop all running timers first.
         self._ses_timer.stop()
         self._pos_timer.stop()
         self._pre_timer.stop()
-        self.race_man.reset_session()
+
+        # Runtime flags mirrored from VB behavior.
+        self.red_flag_out = False
+        self.yellows = [False, False, False]
+        self.sc_active = False
+        self.vsc_active = False
+        self.sc_elapsed_sec = 0
+        self.sc_compensation_sec = 0
+        self._refresh_flag_buttons_ui()
+        self._refresh_sc_time_label()
+        self.pit_open_val = 0
+        self.old_cmd = DeviceCommand.CLC_CMD.value
+        self.old_pre_cmd = DeviceCommand.PRE_RACE_CMD.value
+
+        # Reset race manager session state.
+        rm.reset_session()
+        try:
+            rm.session.pit_state = 0
+        except Exception:
+            pass
+
+        # Restore session timer to the configured max time for current session type.
+        try:
+            max_sec = int(rm.session.max_session_time[int(rm.session_type)])
+        except Exception:
+            max_sec = 0
+        rm.session_time = max_sec
+
+        # Recreate a clean runtime RaceList from DB so drivers/laps/status are fully reset.
+        list_reloaded = False
+        list_id = self._selected_list_id()
+        if list_id > 0:
+            try:
+                self.session_race_list = self._load_racelist_from_db(list_id)
+                rm.session_race_list = self.session_race_list
+                try:
+                    rm.set_session_race_list(self.session_race_list)
+                except Exception:
+                    pass
+                self.write_lap_timing(self.session_race_list)
+                list_reloaded = True
+            except Exception as e:
+                log(f"[RaceWindow] RESET reload list failed: {e}")
+
+        if not list_reloaded:
+            self.refs.lap_table.setRowCount(0)
+
+        # UI restore
         self.refs.start_btn.setText("Start")
-        self.refs.timer_value.setText("00:00")
+        self.refs.timer_value.setText(self._format_mmss(max_sec))
+        self.refs.session_value.setText(rm.get_session_name())
         self.refs.pit_label.setText("Pit Closed")
-        log("Session RESET")
+        self.refs.session_box.setEnabled(True)
+        self.refs.racelist_box.setEnabled(True)
+        self.refs.start_btn.setEnabled(list_reloaded)
+        self.refs.reset_btn.setEnabled(list_reloaded)
+        self.refs.save_results_btn.setEnabled(list_reloaded)
+        self.refs.pre_race_btn.setEnabled(list_reloaded)
+        self.refs.apply_status_btn.setEnabled(list_reloaded)
+
+        # Keep semaphores/devices aligned with reset state.
+        if self.device_man:
+            try:
+                self.device_man.broadcast(DeviceCommand.CLC_CMD.value)
+                self.device_man.broadcast(DeviceCommand.PIT_CLOSER_CMD.value)
+            except Exception as e:
+                log(f"[RaceWindow] RESET device sync error: {e}")
+
+        # Refresh live timing with reset data.
+        try:
+            if self.live_man and self.live_man.enabled:
+                self.live_man.send_session_info(rm)
+                if self.session_race_list:
+                    self.live_man.send_race_data(self.session_race_list.drivers)
+        except Exception as e:
+            log(f"[RaceWindow] RESET live sync error: {e}")
+
+        log(f"Session RESET (list_reloaded={list_reloaded}, max_sec={max_sec})")
 
     # ------------------------------------------------------------
     # Timers ticks -- OK DO NOT TOUCH
@@ -996,6 +1158,21 @@ class RaceManagerWindow(QWidget):
 
         # VB: If raceMan.SessionTime = 0 Then ...
         if tleft <= 0:
+            # In race sessions, append accumulated SC time when base timer reaches 00:00.
+            if bool(getattr(rm, "race", False)) and int(getattr(self, "sc_compensation_sec", 0) or 0) > 0:
+                extra = int(self.sc_compensation_sec)
+                self.sc_compensation_sec = 0
+                try:
+                    rm.time_over = False
+                    rm.leader_finished = False
+                    rm.leader_finish_lap = None
+                except Exception:
+                    pass
+                rm.session_time = extra
+                self.refs.timer_value.setText(self._format_mmss(extra))
+                log(f"[RaceWindow] SC compensation applied: +{extra}s")
+                return
+
             try:
                 rm.session_time = 0
             except Exception:
@@ -1015,7 +1192,7 @@ class RaceManagerWindow(QWidget):
             # VB: DeviceMan.SendCommand(END_SESSION_CMD, Sem)
             try:
                 if self.device_man:
-                    self.device_man.send_command(DeviceCommand.END_SESSION_CMD, DeviceManager.DevicesIDs.Sem)  
+                    self.device_man.broadcast(DeviceCommand.END_SESSION_CMD)  
             except Exception as e:
                 log(f"[RaceWindow] send END_SESSION_CMD ERROR: {e}")
 
@@ -1072,6 +1249,29 @@ class RaceManagerWindow(QWidget):
             pass
 
         self.refs.timer_value.setText(self._format_mmss(tleft))
+
+        # Practice + stopped session: keep countdown running, but do not re-sync pit
+        # every tick (avoids repeated d/P commands while in red flag stop).
+        try:
+            st = int(getattr(rm, "session_status", SessionState.NotStarted))
+            is_practice = int(getattr(rm, "session_type", 0) or 0) == 0
+            if st == int(SessionState.Stopped) and is_practice:
+                if self.live_man and self.live_man.enabled:
+                    self.live_man.send_session_info(rm)
+                return
+        except Exception:
+            pass
+
+        # Count elapsed time under full Safety Car (SC) while session is live.
+        try:
+            st = int(getattr(rm, "session_status", SessionState.NotStarted))
+        except Exception:
+            st = int(SessionState.NotStarted)
+
+        if bool(getattr(self, "sc_active", False)) and st == int(SessionState.Started) and bool(getattr(rm, "race", False)):
+            self.sc_elapsed_sec += 1
+            self.sc_compensation_sec += 1
+            self._refresh_sc_time_label()
 
         try:
             pit_state = rm.pit_state
@@ -1209,6 +1409,25 @@ class RaceManagerWindow(QWidget):
     # Debug
     # ------------------------------------------------------------
     @Slot()
+    def _on_open_live_clicked(self) -> None:
+        live_port = int(getattr(self.settings, "live_port", 0))
+        host = str(getattr(self.settings, "live_ip", "") or "").strip()
+
+        if host in ("", "0.0.0.0", "::"):
+            host = (self.refs.ip_label.text() or "").strip()
+        if host in ("", "NONE", "0.0.0.0", "::"):
+            host = self._get_local_ip_best_effort()
+
+        url = f"http://{host}:{live_port}"
+
+        try:
+            os.startfile(url)
+        except Exception:
+            webbrowser.open(url)
+
+        log(f"[RaceWindow] Open live timing page: {url}")
+
+    @Slot()
     def _on_debug_clicked(self):
         try:
             if not self.session_race_list:
@@ -1261,9 +1480,14 @@ class RaceManagerWindow(QWidget):
     # ------------------------------------------------------------
     def _toggle_yellow(self, i: int) -> None:
         self.yellows[i] = not self.yellows[i]
+        if self.yellows[i]:
+            self.sc_active = False
+            self.vsc_active = False
         self.yellow_management()
 
     def yellow_management(self) -> None:
+        self._refresh_flag_buttons_ui()
+
         if not self.device_man:
             return
 
@@ -1272,6 +1496,7 @@ class RaceManagerWindow(QWidget):
             if y2:
                 if y3:
                     self.yellows = [False, False, False]
+                    self._refresh_flag_buttons_ui()
                     self._on_vsc_clicked()
                     return
                 cmd = DeviceCommand.YELLOW_FS_CMD.value
@@ -1284,13 +1509,17 @@ class RaceManagerWindow(QWidget):
         else:
             cmd = DeviceCommand.CLC_YELLOW_CMD.value
 
-        self.device_man.send_command(cmd, DeviceManager.DevicesIDs.Sem)
+        self.device_man.broadcast(cmd)
         log(f"[RaceWindow] YellowManagement -> {cmd}")
 
     def _on_green_clicked(self) -> None:
         if self.device_man:
             self.device_man.broadcast(DeviceCommand.GREEN_FLAG_CMD.value)
             log("FLAG Green")
+            self.yellows = [False, False, False]
+            self.sc_active = False
+            self.vsc_active = False
+            self._refresh_flag_buttons_ui()
 
     def _on_red_clicked(self) -> None:
         if self.device_man:
@@ -1299,38 +1528,62 @@ class RaceManagerWindow(QWidget):
 
     def _on_clear_clicked(self) -> None:
         if self.device_man:
-            self.device_man.send_command(DeviceCommand.CLC_CMD.value, DeviceManager.DevicesIDs.Sem)
+            self.device_man.broadcast(DeviceCommand.CLC_CMD.value)
             log("FLAG Clear")
+        self.yellows = [False, False, False]
+        self.sc_active = False
+        self.vsc_active = False
+        self._refresh_flag_buttons_ui()
 
     def _on_sc_clicked(self) -> None:
+        self.sc_active = not self.sc_active
+        if self.sc_active:
+            self.vsc_active = False
+            self.yellows = [False, False, False]
+            cmd = DeviceCommand.SAFETY_CAR_CMD.value
+        else:
+            cmd = DeviceCommand.GREEN_FLAG_CMD.value
+
+        self._refresh_flag_buttons_ui()
+
         if self.device_man:
-            self.device_man.send_command(DeviceCommand.SAFETY_CAR_CMD.value, DeviceManager.DevicesIDs.Sem)
-            log("FLAG SC")
+            self.device_man.broadcast(cmd)
+            log(f"FLAG SC {'ON' if self.sc_active else 'OFF'}")
 
     def _on_vsc_clicked(self) -> None:
+        self.vsc_active = not self.vsc_active
+        if self.vsc_active:
+            self.sc_active = False
+            self.yellows = [False, False, False]
+            cmd = DeviceCommand.FULL_YELLOW_CMD.value
+        else:
+            cmd = DeviceCommand.GREEN_FLAG_CMD.value
+
+        self._refresh_flag_buttons_ui()
+
         if self.device_man:
-            self.device_man.send_command(DeviceCommand.FULL_YELLOW_CMD.value, DeviceManager.DevicesIDs.Sem)
-            log("FLAG VSC")
+            self.device_man.broadcast(cmd)
+            log(f"FLAG VSC {'ON' if self.vsc_active else 'OFF'}")
 
     def _on_wet_clicked(self) -> None:
         if self.device_man:
-            self.device_man.send_command(DeviceCommand.WET_RACE_CMD.value, DeviceManager.DevicesIDs.Sem)
+            self.device_man.broadcast(DeviceCommand.WET_RACE_CMD.value)
             log("FLAG Wet")
 
     def _on_formation_lap_clicked(self) -> None:
         if self.device_man:
-            self.device_man.send_command(DeviceCommand.FORMATION_LAP_CMD.value, DeviceManager.DevicesIDs.Sem)
+            self.device_man.broadcast(DeviceCommand.FORMATION_LAP_CMD.value)
             log("Formation lap")
 
     def _on_open_pit_clicked(self) -> None:
         if self.device_man:
-            self.device_man.send_command(DeviceCommand.PIT_OPEN_CMD.value, DeviceManager.DevicesIDs.Sem)
+            self.device_man.broadcast(DeviceCommand.PIT_OPEN_CMD.value)
             self.refs.pit_label.setText("Pit Open")
             log("Pit OPEN")
 
     def _on_close_pit_clicked(self) -> None:
         if self.device_man:
-            self.device_man.send_command(DeviceCommand.PIT_CLOSER_CMD.value, DeviceManager.DevicesIDs.Sem)
+            self.device_man.broadcast(DeviceCommand.PIT_CLOSER_CMD.value)
             self.refs.pit_label.setText("Pit Closed")
             log("Pit CLOSED")
 
@@ -1343,7 +1596,7 @@ class RaceManagerWindow(QWidget):
 
         try:
             # VB: DeviceMan.SendCommand(CLC_CMD, Sem)
-            self.device_man.send_command(DeviceCommand.CLC_CMD, DeviceManager.DevicesIDs.Sem)
+            self.device_man.broadcast(DeviceCommand.CLC_CMD)
 
             # VB: Thread.Sleep(10)
             time.sleep(0.01)
@@ -1351,13 +1604,13 @@ class RaceManagerWindow(QWidget):
             pit_state = self.race_man.pit_state
 
             if pit_state == 0:
-                self.device_man.send_command(DeviceCommand.PIT_CLOSER_CMD, DeviceManager.DevicesIDs.Sem)
+                self.device_man.broadcast(DeviceCommand.PIT_CLOSER_CMD)
 
             elif pit_state == 1:
-                self.device_man.send_command(DeviceCommand.PIT_OPEN_CMD, DeviceManager.DevicesIDs.Sem)
+                self.device_man.broadcast(DeviceCommand.PIT_OPEN_CMD)
 
             elif pit_state == 2:
-                self.device_man.send_command(DeviceCommand.PIT_VALID_CMD, DeviceManager.DevicesIDs.Sem)
+                self.device_man.broadcast(DeviceCommand.PIT_VALID_CMD)
 
         except Exception as e:
             log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
@@ -1509,7 +1762,49 @@ class RaceManagerWindow(QWidget):
     # Save results (hook, poi integriamo ResultManager)
     # ------------------------------------------------------------
     def _on_save_results_clicked(self) -> None:
-        log("Generate Result clicked (TODO: ResultManager)")
+        if not self.race_man:
+            log("[RaceWindow] Generate Result aborted: race manager not ready")
+            return
+
+        if not self.session_race_list:
+            log("[RaceWindow] Generate Result aborted: no race list loaded")
+            return
+
+        root_path = (
+            getattr(getattr(self.settings, "paths", None), "root_path", None)
+            or getattr(self.settings, "root_path", None)
+        )
+        if not root_path:
+            log("[RaceWindow] Generate Result aborted: missing settings root_path")
+            return
+
+        # Keep race manager and local cache aligned before exporting.
+        self.race_man.session_race_list = self.session_race_list
+
+        logo_candidates = [
+            Path(root_path) / "Resources" / "logos" / "e-horizon logo quadrato_trs.png",
+            Path(root_path) / "Resources" / "logos" / "solo logo trs.png",
+            Path(root_path) / "Resources" / "logos" / "e-horizon logo.webp",
+        ]
+        logo_path = next((str(p) for p in logo_candidates if p.exists()), None)
+
+        try:
+            result_manager = ResultManager(
+                race_man=self.race_man,
+                event_name="E-HORIZON CHAMPIONSHIP",
+                logo_path=logo_path,
+            )
+
+            result_pdf = result_manager.generate_result_pdf(root_path=str(root_path))
+            log(f"[RaceWindow] Result PDF generated: {result_pdf}")
+            try:
+                os.startfile(str(result_pdf))
+                log(f"[RaceWindow] Opened result PDF: {result_pdf}")
+            except Exception as e:
+                log(f"[RaceWindow] Cannot open result PDF: {e}")
+        except Exception as e:
+            log(f"[RaceWindow] Generate Result ERROR: {type(e).__name__}: {e}")
+            log(traceback.format_exc())
 
     # ------------------------------------------------------------
     # Utils

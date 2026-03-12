@@ -37,6 +37,7 @@ class SettingsWindowUIRefs:
 
     live_ip_edit: QLineEdit
     live_port_edit: QLineEdit
+    live_public_check: QCheckBox
     live_box: QWidget
 
     tcp_box: QWidget
@@ -270,6 +271,9 @@ class SettingsWindowUI(QWidget):
         live_port_edit = QLineEdit()
         ll.addWidget(lpt, 2, 0)
         ll.addWidget(live_port_edit, 2, 1)
+
+        live_public_check = QCheckBox("Public Tunnel (ngrok)")
+        ll.addWidget(live_public_check, 3, 0, 1, 2)
         
         live_ip_edit.setMinimumWidth(260)
         live_port_edit.setMinimumWidth(260)
@@ -365,6 +369,7 @@ class SettingsWindowUI(QWidget):
             debounce_edit=debounce_edit,
             live_ip_edit=live_ip_edit,
             live_port_edit=live_port_edit,
+            live_public_check=live_public_check,
             live_box=live_box,
             tcp_box=tcp_card,
             tcp_port_edit=tcp_port_edit,

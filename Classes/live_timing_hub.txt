@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import subprocess
 import threading
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date, datetime, time, timedelta
@@ -27,16 +25,13 @@ EVENT_COLOR_MAP: Dict[str, str] = {
     "pitout": "#00C853",
 }
 
-# Public tunnel settings (hardcoded for now, as requested).
-PUBLIC_TUNNEL_DOMAIN = "alphonso-supersacerdotal-tomboyishly.ngrok-free.dev"
-PUBLIC_TUNNEL_AUTHTOKEN = ""
-
 
 @dataclass
 class LiveTimingManager:
     """
-    Hub Live Timing con server principale unico:
-    - DATA + WEB server (REST + WS + pagina): host:port
+    Hub Live Timing con due webserver:
+    - DATA server (REST + WS): host:port
+    - WEB server (pagina):      host:port+1
 
     Mantiene API compatibili con il codice esistente:
       - send_session_info(...)
@@ -47,7 +42,6 @@ class LiveTimingManager:
     address: str
     port: int
     root_path: Optional[str] = None
-    public_enabled: bool = True
 
     enabled: bool = False
 
@@ -58,13 +52,14 @@ class LiveTimingManager:
     _drivers_data: List[Dict[str, Any]] = field(default_factory=list)
 
     app_data: Optional[FastAPI] = None
+    app_web: Optional[FastAPI] = None
+
     _server_data: Optional[uvicorn.Server] = None
+    _server_web: Optional[uvicorn.Server] = None
 
     _thread: Optional[threading.Thread] = None
     _loop: Optional[asyncio.AbstractEventLoop] = None
     _ready_evt: threading.Event = field(default_factory=threading.Event)
-    _ngrok_proc: Optional[subprocess.Popen[str]] = None
-    _ngrok_log_thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -124,20 +119,6 @@ class LiveTimingManager:
                 "drivers": self._drivers_data,
             }
 
-        @app.get("/")
-        async def index() -> HTMLResponse:
-            return HTMLResponse(self._html_page())
-
-        @app.get("/assets/logo.webp", response_model=None)
-        async def logo() -> Any:
-            if not self.root_path:
-                return JSONResponse(status_code=404, content={})
-
-            p = Path(self.root_path) / "Resources" / "logos" / "e-horizon logo.webp"
-            if p.exists():
-                return FileResponse(str(p), media_type="image/webp")
-            return JSONResponse(status_code=404, content={})
-
         @app.websocket("/ws/timing")
         async def ws_timing(ws: WebSocket) -> None:
             await ws.accept()
@@ -171,6 +152,25 @@ class LiveTimingManager:
                     await ws.receive_text()
             except WebSocketDisconnect:
                 self._event_clients.discard(ws)
+
+        return app
+
+    def build_app_web(self) -> FastAPI:
+        app = FastAPI()
+
+        @app.get("/")
+        async def index() -> HTMLResponse:
+            return HTMLResponse(self._html_page())
+
+        @app.get("/assets/logo.webp", response_model=None)
+        async def logo() -> Any:
+            if not self.root_path:
+                return JSONResponse(status_code=404, content={})
+
+            p = Path(self.root_path) / "Resources" / "logos" / "e-horizon logo.webp"
+            if p.exists():
+                return FileResponse(str(p), media_type="image/webp")
+            return JSONResponse(status_code=404, content={})
 
         return app
 
@@ -363,104 +363,31 @@ boot();
 
     async def _start_async(self) -> None:
         self.app_data = self.build_app_data()
+        self.app_web = self.build_app_web()
 
         self._server_data = uvicorn.Server(
             uvicorn.Config(self.app_data, host=self.address, port=self.port, log_level="warning")
         )
+        self._server_web = uvicorn.Server(
+            uvicorn.Config(self.app_web, host=self.address, port=self.port + 1, log_level="warning")
+        )
 
-        # log reachable URL for data/web endpoints (single port)
+        # log reachable URLs for data and web endpoints
         try:
-            log(f"[LiveTiming] DATA+WEB server listening at http://{self.address}:{self.port}")
+            log(f"[LiveTiming] DATA server listening at http://{self.address}:{self.port}")
+            log(f"[LiveTiming] WEB page available at http://{self.address}:{self.port + 1}")
         except Exception:
             pass
 
         self.enabled = True
         asyncio.create_task(self._server_data.serve())
-        self._start_public_tunnel()
+        asyncio.create_task(self._server_web.serve())
 
     async def _stop_async(self) -> None:
         if self._server_data:
             self._server_data.should_exit = True
-        self._stop_public_tunnel()
-
-    def _start_public_tunnel(self) -> None:
-        if not self.public_enabled:
-            return
-
-        if self._ngrok_proc and self._ngrok_proc.poll() is None:
-            return
-
-        cmd = [
-            "ngrok",
-            "http",
-            str(self.port),
-            "--url",
-            PUBLIC_TUNNEL_DOMAIN,
-        ]
-
-        env = os.environ.copy()
-        if PUBLIC_TUNNEL_AUTHTOKEN:
-            env["NGROK_AUTHTOKEN"] = PUBLIC_TUNNEL_AUTHTOKEN
-
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-        try:
-            self._ngrok_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env,
-                creationflags=creationflags,
-            )
-            log(f"[LiveTiming] Public URL: https://{PUBLIC_TUNNEL_DOMAIN} -> http://{self.address}:{self.port}")
-
-            self._ngrok_log_thread = threading.Thread(
-                target=self._consume_ngrok_logs,
-                name="LiveTimingNgrokLogThread",
-                daemon=True,
-            )
-            self._ngrok_log_thread.start()
-        except FileNotFoundError:
-            log("[LiveTiming] ngrok not found. Install ngrok or disable public_enabled.")
-        except Exception as ex:
-            log(f"[LiveTiming] Failed to start ngrok: {ex}")
-
-    def _stop_public_tunnel(self) -> None:
-        proc = self._ngrok_proc
-        self._ngrok_proc = None
-
-        if not proc:
-            return
-
-        try:
-            proc.terminate()
-            proc.wait(timeout=2)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-
-        try:
-            log("[LiveTiming] ngrok stopped")
-        except Exception:
-            pass
-
-    def _consume_ngrok_logs(self) -> None:
-        proc = self._ngrok_proc
-        if not proc or not proc.stdout:
-            return
-
-        try:
-            for raw in proc.stdout:
-                line = raw.strip()
-                if line:
-                    log(f"[LiveTiming][ngrok] {line}")
-        except Exception:
-            pass
+        if self._server_web:
+            self._server_web.should_exit = True
 
     def send_session_info(self, data: Any) -> None:
         self._session_data = self._normalize_session_data(data)

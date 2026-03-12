@@ -14,6 +14,7 @@ live:
   enabled: false
   timing_enabled: false
   tv_Enabled: false
+  public_enabled: false
   ip: 127.0.0.1
   port: 8888
 ui:
