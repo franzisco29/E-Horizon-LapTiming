@@ -41,6 +41,7 @@ class SettingsWindowUIRefs:
     live_box: QWidget
 
     tcp_box: QWidget
+    tcp_ip_value_label: QLabel
     tcp_port_edit: QLineEdit
     dev_checks: list[QCheckBox]
 
@@ -326,16 +327,23 @@ class SettingsWindowUI(QWidget):
         ttitle.setObjectName("GroupTitle")
         tr.addWidget(ttitle, 0, 0, 1, 2)
 
+        tip = QLabel("APP IP")
+        tip.setObjectName("FieldLabel")
+        tcp_ip_value_label = QLabel("-")
+        tcp_ip_value_label.setObjectName("FieldLabel")
+        tr.addWidget(tip, 1, 0)
+        tr.addWidget(tcp_ip_value_label, 1, 1, alignment=Qt.AlignLeft)
+
         tp = QLabel("TCP Port")
         tp.setObjectName("FieldLabel")
         tcp_port_edit = QLineEdit()
         tcp_port_edit.setFixedWidth(140)
-        tr.addWidget(tp, 1, 0)
-        tr.addWidget(tcp_port_edit, 1, 1, alignment=Qt.AlignLeft)
+        tr.addWidget(tp, 2, 0)
+        tr.addWidget(tcp_port_edit, 2, 1, alignment=Qt.AlignLeft)
 
         names = ["Centrale", "Settore 1", "Settore 2", "Pit In", "Pit Out", "Semaforo"]
         dev_checks: list[QCheckBox] = []
-        row = 2
+        row = 3
         for n in names:
             cb = QCheckBox(n)
             dev_checks.append(cb)
@@ -372,6 +380,7 @@ class SettingsWindowUI(QWidget):
             live_public_check=live_public_check,
             live_box=live_box,
             tcp_box=tcp_card,
+            tcp_ip_value_label=tcp_ip_value_label,
             tcp_port_edit=tcp_port_edit,
             dev_checks=dev_checks,
             root_path_edit=root_path_edit,

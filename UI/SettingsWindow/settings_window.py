@@ -7,6 +7,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QMessageBox, QFileDialog
 
 from Modules.config_manager import Settings
+from Modules.net import get_local_ipv4
 from UI.SettingsWindow.settings_window_ui import SettingsWindowUI
 
 
@@ -70,6 +71,7 @@ class SettingsWindow(QDialog):
 
         r.conn_type_combo.setCurrentIndex(int(self.settings.connection_type))
         r.debounce_edit.setText(str(int(self.settings.debounce_ms)))
+        r.tcp_ip_value_label.setText(get_local_ipv4())
 
         r.tcp_port_edit.setText(str(int(self.settings.tcp_port)))
 
@@ -83,6 +85,7 @@ class SettingsWindow(QDialog):
         r.root_path_edit.setText(str(self.settings.root_path))
 
         # enable/disable parts
+        self._apply_feature_availability()
         self._live_toggle()
         self._conn_type_changed()
 
@@ -101,6 +104,12 @@ class SettingsWindow(QDialog):
             r.browse_btn.setEnabled(False)
             r.tv_tower_check.setEnabled(False)
             r.live_public_check.setEnabled(False)
+
+    def _apply_feature_availability(self) -> None:
+        r = self.ui.refs
+
+        r.tv_tower_check.setEnabled(False)
+        r.tv_tower_check.setToolTip("Opzione non disponibile: Tv Tower non viene usata dall'app.")
 
     # -------------------------
     # UI reactions
