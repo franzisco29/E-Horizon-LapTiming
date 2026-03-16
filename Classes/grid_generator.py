@@ -91,11 +91,11 @@ class GridGenerator:
     ) -> Optional[List[GridDriver]]:
         """
         VB LoadStartingGridForView():
-        - chiede 2 json in root/RAW
+        - chiede 2 json in root/result_json
         - se annulli -> None
         - poi build_final_grid(base, final) e ritorna lista ordinata per position
         """
-        raw_path = Path(root_path) / "RAW"
+        raw_path = Path(root_path) / "result_json"
         raw_path.mkdir(parents=True, exist_ok=True)
 
         # 1) Qualifica (base)

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot, QEvent
 from PySide6.QtGui import QFontMetrics
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidgetItem, QAbstractItemView, QHeaderView
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog
 
 from Modules.log_utils import log
 from Modules.net import get_local_ipv4
@@ -17,6 +19,7 @@ from UI.StatusWindow.status_window import StatusWindow
 
 from Modules.db import Database, db_path_from_root, init_db
 from Modules.repositories.drivers_repo import DriversRepo, DriverRow
+from Modules.repositories.circuits_repo import CircuitsRepo
 from Modules.repositories.roadsters_repo import RoadstersRepo, RoadsterRow
 from Modules.repositories.racelists_repo import RaceListsRepo, RaceListRow
 
@@ -35,9 +38,12 @@ from Classes.driver import Driver
 from Classes.race_list import RaceList
 from Classes.race_manager import RaceManager
 from Classes.result_manager import ResultManager
+from Classes.analytics_manager import AnalyticsManager
 from Classes.session import SessionState, SESSION_NAMES
 from Modules.enums import RaceState
 from Classes.roadster import Roadster
+from UI.ResultPreviewWindow.result_preview_window import ResultPreviewWindow
+from UI.AnalyticsSetupDialog.analytics_setup_dialog import AnalyticsSetupDialog
 
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 
@@ -101,6 +107,7 @@ class RaceManagerWindow(QWidget):
         self.old_cmd: str = DeviceCommand.CLC_CMD.value
         self.old_pre_cmd: str = DeviceCommand.PRE_RACE_CMD.value
         self._last_sel = _LastSelection()
+        self._analytics_context_cache: Dict[str, Any] = {}
 
         # Timers
         self._ses_timer = QTimer(self)
@@ -177,6 +184,7 @@ class RaceManagerWindow(QWidget):
         self.refs.start_btn.setEnabled(False)
         self.refs.reset_btn.setEnabled(False)
         self.refs.save_results_btn.setEnabled(False)
+        self.refs.analytics_btn.setEnabled(False)
         self.refs.pre_race_btn.setEnabled(False)
         self.refs.apply_status_btn.setEnabled(False)
 
@@ -201,6 +209,7 @@ class RaceManagerWindow(QWidget):
         r.start_btn.clicked.connect(self._on_start_clicked)
         r.reset_btn.clicked.connect(self._on_reset_clicked)
         r.save_results_btn.clicked.connect(self._on_save_results_clicked)
+        r.analytics_btn.clicked.connect(self._on_generate_analytics_clicked)
         r.live_btn.clicked.connect(self._on_open_live_clicked)
         r.debug_btn.clicked.connect(self._on_debug_clicked)
 
@@ -479,6 +488,7 @@ class RaceManagerWindow(QWidget):
         self.refs.start_btn.setEnabled(True)
         self.refs.reset_btn.setEnabled(True)
         self.refs.save_results_btn.setEnabled(True)
+        self.refs.analytics_btn.setEnabled(True)
         self.refs.pre_race_btn.setEnabled(True)
         self.refs.apply_status_btn.setEnabled(True)
 
@@ -1121,6 +1131,7 @@ class RaceManagerWindow(QWidget):
         self.refs.start_btn.setEnabled(list_reloaded)
         self.refs.reset_btn.setEnabled(list_reloaded)
         self.refs.save_results_btn.setEnabled(list_reloaded)
+        self.refs.analytics_btn.setEnabled(list_reloaded)
         self.refs.pre_race_btn.setEnabled(list_reloaded)
         self.refs.apply_status_btn.setEnabled(list_reloaded)
 
@@ -1761,6 +1772,146 @@ class RaceManagerWindow(QWidget):
     # ------------------------------------------------------------
     # Save results (hook, poi integriamo ResultManager)
     # ------------------------------------------------------------
+    def _analytics_context_path(self, root_path: str) -> Path:
+        analytics_dir = Path(root_path) / "Analytics"
+        analytics_dir.mkdir(parents=True, exist_ok=True)
+        return analytics_dir / "analytics_context.json"
+
+    def _load_analytics_context(self, root_path: str) -> Dict[str, Any]:
+        if self._analytics_context_cache:
+            return dict(self._analytics_context_cache)
+
+        p = self._analytics_context_path(root_path)
+        if not p.exists():
+            return {}
+
+        try:
+            loaded = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                self._analytics_context_cache = dict(loaded)
+                return dict(loaded)
+        except Exception as e:
+            log(f"[RaceWindow] Analytics context load error: {e}")
+        return {}
+
+    def _save_analytics_context(self, root_path: str, payload: Dict[str, Any]) -> Optional[Path]:
+        p = self._analytics_context_path(root_path)
+        try:
+            p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._analytics_context_cache = dict(payload)
+            return p
+        except Exception as e:
+            log(f"[RaceWindow] Analytics context save error: {e}")
+            return None
+
+    def _ask_analytics_context(self, root_path: str) -> Optional[Dict[str, Any]]:
+        seed = self._load_analytics_context(root_path)
+        session_name = ""
+        if self.race_man:
+            try:
+                session_name = str(self.race_man.get_session_name())
+            except Exception:
+                session_name = ""
+
+        circuits_payload: List[Dict[str, Any]] = []
+        try:
+            db_path = db_path_from_root(root_path, filename="ehorizon.db")
+            circuits_repo = CircuitsRepo(Database(db_path))
+            circuits_payload = [
+                {
+                    "circuit_id": int(c.circuit_id),
+                    "name": str(c.name),
+                    "location": str(c.location),
+                    "track_length_m": float(c.track_length_m),
+                    "sector1_m": float(c.sector1_m),
+                    "sector2_m": float(c.sector2_m),
+                    "sector3_m": float(c.sector3_m),
+                    "notes": str(c.notes),
+                }
+                for c in circuits_repo.get_all()
+            ]
+        except Exception as e:
+            log(f"[RaceWindow] Circuits load error for analytics dialog: {e}")
+
+        dlg = AnalyticsSetupDialog(
+            initial_data=seed,
+            circuits=circuits_payload,
+            session_name=session_name,
+            parent=self,
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return None
+
+        payload = dlg.export_payload()
+        payload["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        payload["session_name"] = session_name
+        payload["session_type"] = int(getattr(self.race_man, "session_type", -1) or -1) if self.race_man else -1
+        return payload
+
+    def _on_generate_analytics_clicked(self) -> None:
+        if not self.race_man:
+            log("[RaceWindow] Generate Analytics aborted: race manager not ready")
+            return
+
+        if not self.session_race_list:
+            log("[RaceWindow] Generate Analytics aborted: no race list loaded")
+            return
+
+        root_path = (
+            getattr(getattr(self.settings, "paths", None), "root_path", None)
+            or getattr(self.settings, "root_path", None)
+        )
+        if not root_path:
+            log("[RaceWindow] Generate Analytics aborted: missing settings root_path")
+            return
+
+        try:
+            cur_status = SessionState(int(getattr(self.race_man, "session_status", 0)))
+        except Exception:
+            cur_status = SessionState.NotStarted
+
+        if cur_status == SessionState.Stopped:
+            log("[RaceWindow] Generate Analytics skipped: session is stopped")
+            return
+
+        analytics_context = self._ask_analytics_context(str(root_path))
+        if analytics_context is None:
+            log("[RaceWindow] Generate Analytics cancelled from analytics setup")
+            return
+
+        saved_ctx = self._save_analytics_context(str(root_path), analytics_context)
+        if saved_ctx is not None:
+            log(f"[RaceWindow] Analytics context saved: {saved_ctx}")
+
+        # Analytics use runtime standings as-is and are independent from penalties.
+        self.race_man.session_race_list = self.session_race_list
+
+        try:
+            analytics_manager = AnalyticsManager(race_man=self.race_man)
+            analytics_xlsx = analytics_manager.generate_analytics_excel(
+                root_path=str(root_path),
+                analytics_context=analytics_context,
+            )
+            log(f"[RaceWindow] Analytics Excel generated: {analytics_xlsx}")
+
+            report_path = getattr(analytics_manager, "last_report_path", None)
+            if report_path:
+                log(f"[RaceWindow] Analytics report generated: {report_path}")
+
+            try:
+                os.startfile(str(analytics_xlsx))
+            except Exception as e:
+                log(f"[RaceWindow] Cannot open analytics file: {e}")
+
+            if report_path:
+                try:
+                    os.startfile(str(report_path))
+                except Exception as e:
+                    log(f"[RaceWindow] Cannot open analytics report: {e}")
+        except Exception as analytics_err:
+            log(f"[RaceWindow] Analytics export ERROR: {type(analytics_err).__name__}: {analytics_err}")
+            log(traceback.format_exc())
+
     def _on_save_results_clicked(self) -> None:
         if not self.race_man:
             log("[RaceWindow] Generate Result aborted: race manager not ready")
@@ -1781,12 +1932,40 @@ class RaceManagerWindow(QWidget):
         # Keep race manager and local cache aligned before exporting.
         self.race_man.session_race_list = self.session_race_list
 
+        # Mostra la preview solo a sessione conclusa.
+        try:
+            cur_status = SessionState(int(getattr(self.race_man, "session_status", 0)))
+        except Exception:
+            cur_status = SessionState.NotStarted
+
+        session_ended = cur_status in (SessionState.Finished, SessionState.Stopped)
+
+        penalized_list: Optional[RaceList] = None
+        penalties_pdf: list = []
+        if session_ended:
+            preview = ResultPreviewWindow(self.race_man, self.session_race_list, self)
+            if preview.exec() != QDialog.Accepted:
+                log("[RaceWindow] Generate Result cancelled from preview")
+                return
+
+            penalties = preview.penalty_map()
+            if penalties:
+                log(f"[RaceWindow] Penalties to apply in export: {penalties}")
+
+            penalized_list = preview.build_penalized_copy()
+            penalties_pdf = preview.penalties_for_pdf()
+
         logo_candidates = [
             Path(root_path) / "Resources" / "logos" / "e-horizon logo quadrato_trs.png",
             Path(root_path) / "Resources" / "logos" / "solo logo trs.png",
             Path(root_path) / "Resources" / "logos" / "e-horizon logo.webp",
         ]
         logo_path = next((str(p) for p in logo_candidates if p.exists()), None)
+
+        # Isolamento totale: la lista penalizzata viene usata solo durante la generazione PDF.
+        original_list = self.race_man.session_race_list
+        if penalized_list is not None:
+            self.race_man.session_race_list = penalized_list
 
         try:
             result_manager = ResultManager(
@@ -1795,8 +1974,12 @@ class RaceManagerWindow(QWidget):
                 logo_path=logo_path,
             )
 
-            result_pdf = result_manager.generate_result_pdf(root_path=str(root_path))
+            result_pdf = result_manager.generate_result_pdf(
+                root_path=str(root_path),
+                penalties=penalties_pdf if penalties_pdf else None,
+            )
             log(f"[RaceWindow] Result PDF generated: {result_pdf}")
+
             try:
                 os.startfile(str(result_pdf))
                 log(f"[RaceWindow] Opened result PDF: {result_pdf}")
@@ -1805,6 +1988,8 @@ class RaceManagerWindow(QWidget):
         except Exception as e:
             log(f"[RaceWindow] Generate Result ERROR: {type(e).__name__}: {e}")
             log(traceback.format_exc())
+        finally:
+            self.race_man.session_race_list = original_list
 
     # ------------------------------------------------------------
     # Utils

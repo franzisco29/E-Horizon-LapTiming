@@ -21,6 +21,7 @@ class RaceManagerWindowRefs:
     start_btn: QPushButton
     reset_btn: QPushButton
     save_results_btn: QPushButton
+    analytics_btn: QPushButton
     live_btn: QPushButton
     debug_btn: QPushButton
     pre_race_minutes_box: QComboBox
@@ -146,6 +147,7 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     start_btn = _btn("Start", 90)
     reset_btn = _btn("Reset", 90)
     save_btn = _btn("Generate Result", 130)
+    analytics_btn = _btn("Generate Analytics", 140)
 
     state_lbl = QLabel("Set State:")
     state_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
@@ -201,6 +203,7 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     gl_dir_session.addWidget(state_lbl,         2, 3, alignment=Qt.AlignVCenter)
     gl_dir_session.addWidget(status_box,        2, 4, alignment=Qt.AlignVCenter)
     gl_dir_session.addWidget(apply_status_btn,  2, 5, alignment=Qt.AlignVCenter)
+    gl_dir_session.addWidget(analytics_btn,     2, 0, 1, 2, alignment=Qt.AlignVCenter)
 
     dir_layout.addWidget(gb_dir_service)
     dir_layout.addWidget(gb_dir_session)
@@ -267,6 +270,7 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         start_btn             = start_btn,
         reset_btn             = reset_btn,
         save_results_btn      = save_btn,
+        analytics_btn         = analytics_btn,
         live_btn              = live_btn,
         debug_btn             = debug_btn,
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import QFontDatabase, QIcon
+from PySide6.QtWidgets import QApplication, QWidget
 
 _loaded = False
 
@@ -30,18 +31,18 @@ def load_fonts_once(fonts_dir: Path | None = None) -> None:
 
     _loaded = True
 
-from pathlib import Path
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QWidget
-
 
 def load_favicon(
     widget: QWidget | None = None,
     icon_name: str = "favicon.ico",
-    base_path: str | Path = "resources/icons",
+    root_path: str | Path | None = None,
 ) -> QIcon:
     """
     Carica l'icona dell'applicazione (globalmente o per singola finestra).
+
+    Cerca l'icona in:
+      1. <root_path>/Resources/icons/<icon_name>  (se root_path è fornito)
+      2. <project_root>/Resources/icons/<icon_name>  (fallback dev)
 
     Parameters
     ----------
@@ -49,20 +50,23 @@ def load_favicon(
         Se passato, imposta l'icona solo su quella finestra.
         Se None, imposta l'icona globalmente su QApplication.
     icon_name : str
-        Nome del file icona.
-    base_path : str | Path
-        Cartella dove si trovano le icone.
-
-    Returns
-    -------
-    QIcon
-        L'oggetto icona caricato.
+        Nome del file icona (default: "favicon.ico").
+    root_path : str | Path | None
+        Root del progetto utente (es. da Settings.root_path).
     """
+    candidates: list[Path] = []
 
-    icon_path = Path(base_path) / icon_name
+    if root_path is not None:
+        candidates.append(Path(root_path) / "Resources" / "icons" / icon_name)
 
-    if not icon_path.exists():
-        print(f"[WARN] Icona non trovata: {icon_path}")
+    # Fallback: cartella Resources accanto al progetto
+    project_root = Path(__file__).resolve().parents[1]
+    candidates.append(project_root / "Resources" / "icons" / icon_name)
+
+    icon_path: Path | None = next((p for p in candidates if p.exists()), None)
+
+    if icon_path is None:
+        print(f"[WARN] Icona non trovata: {icon_name}")
         return QIcon()
 
     icon = QIcon(str(icon_path))

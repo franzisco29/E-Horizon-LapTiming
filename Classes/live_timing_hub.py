@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from Modules.log_utils import log
+from Modules.paths import get_app_base_dir
 
 
 EVENT_COLOR_MAP: Dict[str, str] = {
@@ -59,6 +60,7 @@ class LiveTimingManager:
 
     app_data: Optional[FastAPI] = None
     _server_data: Optional[uvicorn.Server] = None
+    _server_task: Optional[asyncio.Task] = None
 
     _thread: Optional[threading.Thread] = None
     _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -97,7 +99,11 @@ class LiveTimingManager:
         if not self._loop:
             return
 
-        asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
+        future = asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
+        try:
+            future.result(timeout=7)
+        except Exception:
+            pass
         self._loop.call_soon_threadsafe(self._loop.stop)
 
         if self._thread and self._thread.is_alive():
@@ -128,14 +134,37 @@ class LiveTimingManager:
         async def index() -> HTMLResponse:
             return HTMLResponse(self._html_page())
 
-        @app.get("/assets/logo.webp", response_model=None)
-        async def logo() -> Any:
-            if not self.root_path:
-                return JSONResponse(status_code=404, content={})
+        @app.get("/favicon.ico", response_model=None)
+        async def favicon() -> Any:
+            candidates: List[Path] = []
 
-            p = Path(self.root_path) / "Resources" / "logos" / "e-horizon logo.webp"
-            if p.exists():
-                return FileResponse(str(p), media_type="image/webp")
+            if self.root_path:
+                candidates.append(Path(self.root_path) / "Resources" / "icons" / "favicon.ico")
+
+            # Fallback robusto: usa Resources dell'app (dev/packaging)
+            candidates.append(get_app_base_dir() / "Resources" / "icons" / "favicon.ico")
+
+            p = next((path for path in candidates if path.exists()), None)
+            if p is not None:
+                return FileResponse(str(p), media_type="image/x-icon")
+            return JSONResponse(status_code=404, content={})
+
+        @app.get("/assets/logo", response_model=None)
+        async def logo() -> Any:
+            candidates: List[Path] = []
+
+            if self.root_path:
+                candidates.append(Path(self.root_path) / "Resources" / "logos" / "e-horizon logo quadrato_trs.png")
+                candidates.append(Path(self.root_path) / "Resources" / "logos" / "e-horizon logo.webp")
+
+            # Fallback robusto: usa Resources dell'app (dev/packaging)
+            candidates.append(get_app_base_dir() / "Resources" / "logos" / "e-horizon logo quadrato_trs.png")
+            candidates.append(get_app_base_dir() / "Resources" / "logos" / "e-horizon logo.webp")
+
+            p = next((path for path in candidates if path.exists()), None)
+            if p is not None:
+                media_type = "image/png" if p.suffix.lower() == ".png" else "image/webp"
+                return FileResponse(str(p), media_type=media_type)
             return JSONResponse(status_code=404, content={})
 
         @app.websocket("/ws/timing")
@@ -182,6 +211,7 @@ class LiveTimingManager:
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>E-Horizon LiveTiming</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
 <style>
 :root {{
   --bg: #070a0f;
@@ -210,6 +240,12 @@ body {{
   gap:12px;
   margin-bottom:16px;
 }}
+.header-right {{
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    min-width: 220px;
+}}
 .timer {{ font-size: clamp(24px, 4vw, 42px); font-weight: 700; }}
 .meta {{ color: var(--muted); }}
 .panel {{
@@ -223,6 +259,20 @@ th, td {{ padding: 12px; border-bottom: 1px solid var(--line); text-align:left; 
 th {{ color: var(--muted); font-weight: 600; }}
 tr.row {{ transition: background-color .35s ease; }}
 tr.row:nth-child(even) {{ background: rgba(255,255,255,.02); }}
+
+/* Più aria ai tempi settore e alle colonne cronometriche */
+th:nth-child(4), td:nth-child(4),
+th:nth-child(5), td:nth-child(5),
+th:nth-child(6), td:nth-child(6),
+th:nth-child(7), td:nth-child(7),
+th:nth-child(10), td:nth-child(10),
+th:nth-child(11), td:nth-child(11),
+th:nth-child(12), td:nth-child(12) {{
+    min-width: 92px;
+    white-space: nowrap;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}}
 .badge {{
   font-size: 12px;
   border: 1px solid var(--line);
@@ -245,7 +295,9 @@ tr.row:nth-child(even) {{ background: rgba(255,255,255,.02); }}
         <h1 style="margin:0">E-Horizon Live Timing</h1>
         <div id="sessionMeta" class="meta">In attesa dati sessione...</div>
       </div>
-      <div id="timer" class="timer">--:--:--</div>
+            <div class="header-right">
+                <div id="timer" class="timer">--:--:--</div>
+            </div>
     </div>
 
     <div class="panel">
@@ -258,12 +310,12 @@ tr.row:nth-child(even) {{ background: rgba(255,255,255,.02); }}
             <th>S1</th>
             <th>S2</th>
             <th>S3</th>
-            <th>Best</th>
+                        <th id="colBestLastA">Best</th>
             <th>Laps</th>
             <th>Status</th>
             <th>Gap</th>
             <th>Int</th>
-            <th>Last</th>
+                        <th id="colBestLastB">Last</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -282,8 +334,37 @@ const wsBase  = `${{protocol}}://${{host}}`;
 const elRows = document.getElementById("rows");
 const elTimer = document.getElementById("timer");
 const elMeta = document.getElementById("sessionMeta");
+const elBestLastA = document.getElementById("colBestLastA");
+const elBestLastB = document.getElementById("colBestLastB");
 
-const state = {{ rows: new Map() }};
+const state = {{ rows: new Map(), isRace: false }};
+
+function detectIsRace(session) {{
+    if (!session || typeof session !== 'object') return false;
+
+    const direct = session.is_race ?? session.isRace ?? session.race;
+    if (typeof direct === 'boolean') return direct;
+    if (typeof direct === 'number') return direct !== 0;
+    if (typeof direct === 'string') {{
+        const v = direct.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on', 'race', 'gara'].includes(v)) return true;
+        if (['0', 'false', 'no', 'off', 'practice', 'qualifying', 'qualifica'].includes(v)) return false;
+    }}
+
+    const st = String(session.sessionType ?? '').toLowerCase();
+    return st.includes('race') || st.includes('gara');
+}}
+
+function syncBestLastHeaders() {{
+    if (!elBestLastA || !elBestLastB) return;
+    if (state.isRace) {{
+        elBestLastA.textContent = 'Last';
+        elBestLastB.textContent = 'Best';
+    }} else {{
+        elBestLastA.textContent = 'Best';
+        elBestLastB.textContent = 'Last';
+    }}
+}}
 
 function render(drivers) {{
   if (!Array.isArray(drivers)) return;
@@ -295,15 +376,15 @@ function render(drivers) {{
       <td>${{d.position ?? ''}}</td>
       <td>${{d.name ?? ''}}</td>
       <td>${{d.team ?? ''}}</td>
-      <td>${{d.s1 ?? ''}}</td>
-      <td>${{d.s2 ?? ''}}</td>
-      <td>${{d.s3 ?? ''}}</td>
-      <td>${{d.best ?? ''}}</td>
+      <td>${{d.sector1 ?? ''}}</td>
+      <td>${{d.sector2 ?? ''}}</td>
+      <td>${{d.sector3 ?? ''}}</td>
+            <td>${{state.isRace ? (d.lastLap ?? '') : (d.fastLap ?? '')}}</td>
       <td>${{d.laps ?? ''}}</td>
       <td><span class="badge">${{d.status ?? ''}}</span></td>
       <td>${{d.gap ?? ''}}</td>
       <td>${{d.interval ?? ''}}</td>
-      <td>${{d.lastLap ?? ''}}</td>
+            <td>${{state.isRace ? (d.fastLap ?? '') : (d.lastLap ?? '')}}</td>
     </tr>`).join("");
 
   state.rows.clear();
@@ -321,7 +402,10 @@ function flash(key, kind) {{
 
 function updateSession(data) {{
   if (!data || typeof data !== 'object') return;
-  elTimer.textContent = data.sessionTime || '--:--:--';
+    if (elTimer) elTimer.textContent = data.sessionTime || '--:--:--';
+
+    state.isRace = detectIsRace(data);
+    syncBestLastHeaders();
 
   const type = data.sessionType || 'Session';
   const status = data.sessionStatus || 'N/A';
@@ -375,12 +459,18 @@ boot();
             pass
 
         self.enabled = True
-        asyncio.create_task(self._server_data.serve())
+        self._server_task = asyncio.create_task(self._server_data.serve())
         self._start_public_tunnel()
 
     async def _stop_async(self) -> None:
         if self._server_data:
             self._server_data.should_exit = True
+            task = self._server_task
+            if task and not task.done():
+                try:
+                    await asyncio.wait_for(task, timeout=5.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
         self._stop_public_tunnel()
 
     def _start_public_tunnel(self) -> None:
@@ -390,12 +480,16 @@ boot();
         if self._ngrok_proc and self._ngrok_proc.poll() is None:
             return
 
+        # Use explicit 127.0.0.1 to avoid IPv6 resolution issues on Windows
+        # (ngrok resolves "localhost" as [::1] but uvicorn may listen on 127.0.0.1 only)
+        upstream = f"http://127.0.0.1:{self.port}"
         cmd = [
             "ngrok",
             "http",
-            str(self.port),
+            upstream,
             "--url",
             PUBLIC_TUNNEL_DOMAIN,
+            "--pooling-enabled",
         ]
 
         env = os.environ.copy()

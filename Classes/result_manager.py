@@ -70,11 +70,12 @@ class ResultManager:
     race_man: Any
     event_name: str = "E-HORIZON CHAMPIONSHIP"
     logo_path: Optional[str] = None  # es: "resources/logo.png"
+    _penalty_seconds_by_number: Dict[int, int] = None
 
     # ----------------------------
     # Public API
     # ----------------------------
-    def generate_result_pdf(self, root_path: str) -> Path:
+    def generate_result_pdf(self, root_path: str, penalties: Optional[List[Dict[str, Any]]] = None) -> Path:
         """
         VB: GenerateResultPDF()
         Crea PDF in <root_path>/Results/Results <session> <date>.pdf
@@ -82,6 +83,8 @@ class ResultManager:
         """
         if not self.event_name:
             self.event_name = "E-HORIZON CHAMPIONSHIP"
+
+        self._penalty_seconds_by_number = self._build_penalty_seconds_map(penalties)
 
         session = self._get_session_name()
         results_dir = Path(root_path) / "Results"
@@ -211,6 +214,9 @@ class ResultManager:
         if self._pit_log_enabled():
             self._add_pit_log_pages(c, page_w, page_h, drivers)
 
+        if penalties:
+            self._add_penalty_page(c, page_w, page_h, penalties)
+
         c.save()
 
         # Save RAW
@@ -236,13 +242,13 @@ class ResultManager:
     def save_raw_data(self, root_path: str, pdf_filename: str) -> Path:
         """
         VB: SaveRawData(raceManager, filename)
-        filename -> RAW json con stesso nome base.
+        filename -> result_json json con stesso nome base.
         """
-        raw_dir = Path(root_path) / "RAW"
+        raw_dir = Path(root_path) / "result_json"
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         # base filename (senza estensione)
-        base = Path(pdf_filename).stem.replace("Results", "RAW")
+        base = Path(pdf_filename).stem.replace("Results", "result_json")
         raw_filename = raw_dir / f"{base}.json"
 
         rm = self.race_man
@@ -258,6 +264,7 @@ class ResultManager:
             driver_data["name"] = d.name
             driver_data["surname"] = d.surname
             driver_data["number"] = d.race_number
+            driver_data["transponderNumber"] = d.number
             driver_data["team"] = d.team
             driver_data["laps"] = d.laps
             driver_data["history"] = [fmt_mm_ss_mmm(ts) for ts in d.lap_history]
@@ -271,6 +278,7 @@ class ResultManager:
 
             best = bool(rm.race and best_lap_drv and best_lap_drv.number == d.number)
             driver_data["points"] = rm.get_points(d.position, best)
+            driver_data["penaltySeconds"] = int((self._penalty_seconds_by_number or {}).get(int(d.number), 0))
 
             driver_list.append(driver_data)
 
@@ -307,6 +315,28 @@ class ResultManager:
     def _pit_log_enabled(self) -> bool:
         session = getattr(self.race_man, "session", None)
         return bool(getattr(self.race_man, "race", False) and getattr(session, "pit_on", False))
+
+    def _build_penalty_seconds_map(self, penalties: Optional[List[Dict[str, Any]]]) -> Dict[int, int]:
+        out: Dict[int, int] = {}
+        if not penalties:
+            return out
+
+        for row in penalties:
+            try:
+                number = int(row.get("driver_number", 0) or 0)
+            except Exception:
+                number = 0
+
+            try:
+                sec = int(row.get("seconds", 0) or 0)
+            except Exception:
+                sec = 0
+
+            if number <= 0 or sec <= 0:
+                continue
+            out[number] = out.get(number, 0) + sec
+
+        return out
 
     def _add_lap_history_pages(self, c: canvas.Canvas, page_w: float, page_h: float, drivers: List[Any]) -> None:
         all_drivers = sorted(drivers, key=lambda d: d.number)
@@ -477,6 +507,151 @@ class ResultManager:
             c.drawString(x[3], y, str(ev["team"]))
             c.drawString(x[4], y, fmt_mm_ss_mmm(ev["pit_time"]))
             y -= 6 * mm
+
+        c.setFont("Helvetica", 7)
+        c.drawString(15 * mm, 12 * mm, "Approved by General Director E-Horizon Francesco Troianiello")
+        c.drawRightString(page_w - 15 * mm, 12 * mm, datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+
+    def _add_penalty_page(
+        self,
+        c: canvas.Canvas,
+        page_w: float,
+        page_h: float,
+        penalties: List[Dict[str, Any]],
+    ) -> None:
+        if not penalties:
+            return
+
+        detail_col_w = [58 * mm, 20 * mm, 100 * mm]
+        detail_x = self._centered_x_positions(page_w, detail_col_w)
+        detail_headers = ["PILOTA", "PEN.(s)", "MOTIVAZIONE"]
+
+        summary_col_w = [58 * mm, 22 * mm, 24 * mm, 46 * mm]
+        summary_x = self._centered_x_positions(page_w, summary_col_w)
+        summary_headers = ["PILOTA", "TOT PEN.(s)", "MEDIA", "CONVERSIONE"]
+
+        def draw_header(y_val: float) -> float:
+            y_logo = self._draw_logo_centered(c, page_w, y_val, max_w=25 * mm, max_h=25 * mm)
+            c.setFont("Helvetica-Bold", 14)
+            c.drawCentredString(page_w / 2, y_logo, f"{self.event_name} - PENALITA'")
+            y_logo -= 7 * mm
+
+            c.setFont("Helvetica", 9)
+            c.drawCentredString(page_w / 2, y_logo, f"{self._get_session_name()} | {datetime.now():%d/%m/%Y %H:%M}")
+            y_logo -= 10 * mm
+
+            return y_logo - 6 * mm
+
+        c.showPage()
+        y = draw_header(page_h - 20 * mm)
+
+        # --- Sezione 1: dettaglio penalita e motivazioni ---
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(detail_x[0], y, "Dettaglio penalita")
+        y -= 6 * mm
+
+        c.setFont("Helvetica-Bold", 8.5)
+        for i, h in enumerate(detail_headers):
+            c.drawString(detail_x[i], y, h)
+        y -= 6 * mm
+
+        c.setFont("Helvetica", 8.5)
+        for row in penalties:
+            if y < 38 * mm:
+                c.showPage()
+                y = draw_header(page_h - 20 * mm)
+
+                c.setFont("Helvetica-Bold", 9)
+                c.drawString(detail_x[0], y, "Dettaglio penalita")
+                y -= 6 * mm
+
+                c.setFont("Helvetica-Bold", 8.5)
+                for i, h in enumerate(detail_headers):
+                    c.drawString(detail_x[i], y, h)
+                y -= 6 * mm
+
+                c.setFont("Helvetica", 8.5)
+
+            driver_name = str(row.get("driver_name", ""))
+            sec = str(row.get("seconds", ""))
+            motivation = str(row.get("motivation", ""))
+
+            c.drawString(detail_x[0], y, driver_name)
+            c.drawString(detail_x[1], y, sec)
+            c.drawString(detail_x[2], y, motivation)
+            y -= 6 * mm
+
+        # --- Sezione 2: sommatorie per pilota ---
+        aggregates: Dict[str, Dict[str, str]] = {}
+        for row in penalties:
+            driver_name = str(row.get("driver_name", ""))
+            sec_val = int(row.get("seconds", 0) or 0)
+            avg_lap = str(row.get("avg_lap", "-"))
+            conversion = str(row.get("lap_penalty", "-"))
+            if driver_name not in aggregates:
+                aggregates[driver_name] = {
+                    "seconds": "0",
+                    "avg_lap": avg_lap,
+                    "conversion": conversion,
+                }
+            total = int(aggregates[driver_name]["seconds"]) + sec_val
+            aggregates[driver_name]["seconds"] = str(total)
+            aggregates[driver_name]["avg_lap"] = avg_lap
+            aggregates[driver_name]["conversion"] = conversion
+
+        if y < 52 * mm:
+            c.showPage()
+            y = draw_header(page_h - 20 * mm)
+
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(summary_x[0], y, "Riepilogo conversione")
+        y -= 6 * mm
+
+        c.setFont("Helvetica-Bold", 8.5)
+        for i, h in enumerate(summary_headers):
+            c.drawString(summary_x[i], y, h)
+        y -= 6 * mm
+
+        c.setFont("Helvetica", 8.5)
+        for driver_name in sorted(aggregates.keys()):
+            if y < 26 * mm:
+                c.showPage()
+                y = draw_header(page_h - 20 * mm)
+
+                c.setFont("Helvetica-Bold", 9)
+                c.drawString(summary_x[0], y, "Riepilogo conversione")
+                y -= 6 * mm
+
+                c.setFont("Helvetica-Bold", 8.5)
+                for i, h in enumerate(summary_headers):
+                    c.drawString(summary_x[i], y, h)
+                y -= 6 * mm
+
+                c.setFont("Helvetica", 8.5)
+
+            row_sum = aggregates[driver_name]
+            c.drawString(summary_x[0], y, driver_name)
+            c.drawString(summary_x[1], y, row_sum["seconds"])
+            c.drawString(summary_x[2], y, row_sum["avg_lap"])
+            c.drawString(summary_x[3], y, row_sum["conversion"])
+            y -= 6 * mm
+
+        if y < 24 * mm:
+            c.showPage()
+            y = page_h - 24 * mm
+
+        c.setFont("Helvetica-Oblique", 7.5)
+        c.drawString(
+            15 * mm,
+            y,
+            "Disclaimer: conversione penalita = floor(penalita_secondi / media_giro).",
+        )
+        y -= 4 * mm
+        c.drawString(
+            15 * mm,
+            y,
+            "Vengono applicati i giri interi risultanti; al tempo si applicano solo i secondi residui.",
+        )
 
         c.setFont("Helvetica", 7)
         c.drawString(15 * mm, 12 * mm, "Approved by General Director E-Horizon Francesco Troianiello")

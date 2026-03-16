@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import QTimer
 
 from Modules.config_manager import Settings
+from Modules.resources_manager import load_favicon
 from UI.HomeWindow.home_window_ui import HomeWindowUI
 from Modules.log_utils import log 
 
@@ -27,7 +28,10 @@ class HomeWindow(QWidget):
         # 3. Inizializzazione dati (Settings)
         # Usiamo load_default() che gestisce automaticamente path e creazione file
         log("HomeWindow loading settings...")
-        self.settings = Settings.load_default() 
+        self.settings = Settings.load_default()
+
+        # Icona applicazione (usa root_path dalle settings)
+        load_favicon(root_path=self.settings.root_path)
 
         # 4. Connessione Eventi
         log("HomeWindow wiring events...")
@@ -47,6 +51,7 @@ class HomeWindow(QWidget):
         self.ui.bt_settings_small.clicked.connect(self.open_settings)
         self.ui.bt_race_manager.clicked.connect(self.open_race_manager)
         self.ui.bt_driver_manager.clicked.connect(self.open_driver_manager)
+        self.ui.bt_circuits.clicked.connect(self.open_circuit_manager)
         self.ui.bt_grid.clicked.connect(self.open_grid_preview)
         self.ui.bt_new_list.clicked.connect(self.open_racelist_manager)
         self.ui.bt_roadsters.clicked.connect(self.open_roadster_creator)
@@ -87,6 +92,12 @@ class HomeWindow(QWidget):
         log("HomeWindow.open_driver_manager CLICK")
         from UI.DriversWindow.drivers_window import DriversWindow
         dlg = DriversWindow(self, self.settings)
+        dlg.exec()
+
+    def open_circuit_manager(self) -> None:
+        log("HomeWindow.open_circuit_manager CLICK")
+        from UI.CircuitsWindow.circuits_window import CircuitsWindow
+        dlg = CircuitsWindow(self, self.settings)
         dlg.exec()
 
     def open_grid_preview(self) -> None:

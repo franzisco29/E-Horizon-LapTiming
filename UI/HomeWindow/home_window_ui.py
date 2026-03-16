@@ -125,6 +125,7 @@ class HomeWindowUI:
     bt_settings_small: QToolButton
     bt_race_manager: QPushButton
     bt_driver_manager: QPushButton
+    bt_circuits: QPushButton
     bt_grid: QPushButton
     bt_new_list: QPushButton
     bt_roadsters: QPushButton
@@ -203,11 +204,15 @@ class HomeWindowUI:
         bt_driver_manager = QPushButton("Piloti (Crea / Modifica)")
         bt_driver_manager.setIcon(icon("driver.svg"))
 
+        bt_circuits = QPushButton("Circuiti")
+        bt_circuits.setIcon(icon("circuit.svg"))
+
         bt_grid = QPushButton("Grid Preview")
         bt_grid.setIcon(icon("grid.svg"))
 
         left.addWidget(bt_race_manager)
         left.addWidget(bt_driver_manager)
+        left.addWidget(bt_circuits)
         left.addWidget(bt_grid)
         left.addStretch(1)
 
@@ -235,6 +240,7 @@ class HomeWindowUI:
             bt_settings_small=bt_settings_small,
             bt_race_manager=bt_race_manager,
             bt_driver_manager=bt_driver_manager,
+            bt_circuits=bt_circuits,
             bt_grid=bt_grid,
             bt_new_list=bt_new_list,
             bt_roadsters=bt_roadsters,

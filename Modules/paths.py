@@ -6,8 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from Modules.log_utils import log
 
-REQUIRED_FOLDERS: List[str] = ["Data", "Results", "RAW", "Logs", "Settings", "Resources"]
+
+REQUIRED_FOLDERS: List[str] = ["Data", "Results", "result_json", "Logs", "Settings", "Resources", "Analytics"]
+
+# Cartelle rinominate nelle versioni precedenti -> nuovo nome
+_LEGACY_FOLDER_RENAMES: List[tuple] = [
+    ("RAW", "result_json"),
+]
 USER_FILE = "userData.ini"
 
 
@@ -31,7 +38,7 @@ def get_app_base_dir() -> Path:
     """
     Ritorna la cartella "base" dell'app da cui leggere le risorse.
 
-    - In dev: cartella dove si trova questo file (o comunque il modulo corrente).
+    - In dev: root del progetto (cartella sopra Modules).
     - In exe PyInstaller: cartella di estrazione temporanea (sys._MEIPASS).
     - In exe "onedir": spesso coincide con la cartella dell'exe.
     """
@@ -43,32 +50,32 @@ def get_app_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
 
-    # Dev: folder del file corrente
-    return Path(__file__).resolve().parent
+    # Dev: root progetto (es. .../E-Horizon-LapTiming)
+    return Path(__file__).resolve().parents[1]
 
 
-def sync_folder_contents(src: Path, dst: Path) -> bool:
+def sync_folder_contents(src: Path, dst: Path) -> int:
     """
     Copia il CONTENUTO di src dentro dst (non crea dst/src, ma riempie dst).
-    Ritorna True se ha copiato qualcosa.
+    Ritorna il numero di elementi top-level copiati.
     """
     if not src.exists() or not src.is_dir():
-        return False
+        return 0
 
     dst.mkdir(parents=True, exist_ok=True)
 
-    copied_any = False
+    copied_count = 0
     for item in src.iterdir():
         s = item
         d = dst / item.name
         if item.is_dir():
             shutil.copytree(s, d, dirs_exist_ok=True)
-            copied_any = True
+            copied_count += 1
         else:
             d.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(s, d)
-            copied_any = True
-    return copied_any
+            copied_count += 1
+    return copied_count
 
 
 def create_required_folders(
@@ -116,6 +123,16 @@ def create_required_folders(
             shutil.copytree(src, dst, dirs_exist_ok=True)
             migrated = True
 
+        # Migrazione cartelle rinominate (es. RAW -> result_json)
+        for old_name, new_name in _LEGACY_FOLDER_RENAMES:
+            src_legacy = old_root_p / old_name
+            if not src_legacy.exists():
+                continue
+            dst_renamed = new_root_p / new_name
+            dst_renamed.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src_legacy, dst_renamed, dirs_exist_ok=True)
+            migrated = True
+
         # userData.ini
         src_user = old_root_p / USER_FILE
         if src_user.exists():
@@ -140,10 +157,14 @@ def create_required_folders(
         src_res = app_base / app_resources_subdir
         dst_res = new_root_p / "Resources"
 
-        copied = sync_folder_contents(src_res, dst_res)
-        if not copied:
-            warnings.append(
-                f"Nessuna risorsa copiata: non trovo '{app_resources_subdir}' in '{app_base}'."
+        copied_count = sync_folder_contents(src_res, dst_res)
+        if copied_count == 0:
+            msg = f"Nessuna risorsa copiata: non trovo '{app_resources_subdir}' in '{app_base}'."
+            warnings.append(msg)
+            log(f"[PATHS] {msg}")
+        else:
+            log(
+                f"[PATHS] Resources sincronizzate: {copied_count} elementi da '{src_res}' a '{dst_res}'."
             )
 
     return RootMigrationResult(created_any, migrated, removed_old, warnings)
