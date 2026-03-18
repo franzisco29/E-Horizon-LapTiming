@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QPushButton,
     QToolButton,
 )
@@ -190,50 +191,46 @@ class HomeWindowUI:
         label.setObjectName("SectionLabel")
         outer.addWidget(label)
 
-        grid = QHBoxLayout()
-        grid.setSpacing(14)
-
-        # Colonna sinistra
-        left = QVBoxLayout()
-        left.setSpacing(12)
+        actions_grid = QGridLayout()
+        actions_grid.setHorizontalSpacing(14)
+        actions_grid.setVerticalSpacing(12)
 
         bt_race_manager = QPushButton("Race Manager")
         bt_race_manager.setObjectName("Primary")
         bt_race_manager.setIcon(icon("flag.svg"))
+        bt_race_manager.setMinimumHeight(48)
 
         bt_driver_manager = QPushButton("Piloti (Crea / Modifica)")
         bt_driver_manager.setIcon(icon("driver.svg"))
+        bt_driver_manager.setMinimumHeight(48)
 
         bt_circuits = QPushButton("Circuiti")
         bt_circuits.setIcon(icon("circuit.svg"))
+        bt_circuits.setMinimumHeight(48)
 
         bt_grid = QPushButton("Grid Preview")
         bt_grid.setIcon(icon("grid.svg"))
-
-        left.addWidget(bt_race_manager)
-        left.addWidget(bt_driver_manager)
-        left.addWidget(bt_circuits)
-        left.addWidget(bt_grid)
-        left.addStretch(1)
-
-        # Colonna destra
-        right = QVBoxLayout()
-        right.setSpacing(12)
+        bt_grid.setMinimumHeight(48)
 
         bt_new_list = QPushButton("Race Lists")
         bt_new_list.setIcon(icon("list.svg"))
+        bt_new_list.setMinimumHeight(48)
 
         bt_roadsters = QPushButton("Roadsters")
         bt_roadsters.setIcon(icon("roster.svg"))
+        bt_roadsters.setMinimumHeight(48)
 
-        right.addWidget(bt_new_list)
-        right.addWidget(bt_roadsters)
-        right.addStretch(1)
+        actions_grid.addWidget(bt_race_manager, 0, 0)
+        actions_grid.addWidget(bt_new_list, 0, 1)
+        actions_grid.addWidget(bt_driver_manager, 1, 0)
+        actions_grid.addWidget(bt_roadsters, 1, 1)
+        actions_grid.addWidget(bt_circuits, 2, 0)
+        actions_grid.addWidget(bt_grid, 2, 1)
 
-        grid.addLayout(left, 1)
-        grid.addLayout(right, 1)
+        actions_grid.setColumnStretch(0, 1)
+        actions_grid.setColumnStretch(1, 1)
 
-        outer.addLayout(grid, 1)
+        outer.addLayout(actions_grid, 1)
 
         return HomeWindowUI(
             root=root,

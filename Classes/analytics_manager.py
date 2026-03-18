@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +40,7 @@ def _fmt_td(value: Any) -> str:
 class AnalyticsManager:
     race_man: Any
     last_report_path: Optional[Path] = None
+    last_web_payload_path: Optional[Path] = None
 
     def generate_analytics_excel(
         self,
@@ -69,6 +71,11 @@ class AnalyticsManager:
         df_benchmark = self._build_benchmark_df(df_summary)
         df_ai = self._build_ai_insights_df(df_laps)
         df_ai_driver = self._build_ai_driver_summary_df(df_ai, df_summary, df_stints)
+        df_exec = self._build_executive_summary_df(df_summary, df_kpi, df_benchmark, df_ai_driver, df_stints)
+        df_lap_delta = self._build_lap_delta_df(df_laps)
+        df_sector_rank = self._build_sector_rankings_df(df_sectors)
+        df_pit_eff = self._build_pit_efficiency_df(df_pits)
+        df_cons_trend = self._build_consistency_trend_df(df_laps)
 
         report_path = out_dir / f"SessionAnalytics_{session_name}_{now:%Y%m%d_%H%M%S}_REPORT.txt"
         report_text = self._build_human_report(
@@ -83,12 +90,38 @@ class AnalyticsManager:
         report_path.write_text(report_text, encoding="utf-8")
         self.last_report_path = report_path
 
+        web_payload_path = out_dir / f"SessionAnalytics_{session_name}_{now:%Y%m%d_%H%M%S}_WEB.json"
+        web_payload = self._build_web_insights_payload(
+            now=now,
+            context=context,
+            summary_df=df_summary,
+            kpi_df=df_kpi,
+            benchmark_df=df_benchmark,
+            ai_df=df_ai,
+            ai_driver_df=df_ai_driver,
+            stints_df=df_stints,
+            lap_delta_df=df_lap_delta,
+            sector_rank_df=df_sector_rank,
+            pit_eff_df=df_pit_eff,
+            consistency_trend_df=df_cons_trend,
+        )
+        web_payload_path.write_text(
+            json.dumps(web_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.last_web_payload_path = web_payload_path
+
         with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+            df_exec.to_excel(writer, sheet_name="executive_summary", index=False)
             df_context.to_excel(writer, sheet_name="session_overview", index=False)
             df_summary.to_excel(writer, sheet_name="vehicles_summary", index=False)
             df_laps.to_excel(writer, sheet_name="laps_raw", index=False)
+            df_lap_delta.to_excel(writer, sheet_name="lap_deltas", index=False)
+            df_cons_trend.to_excel(writer, sheet_name="consistency_trend", index=False)
             df_sectors.to_excel(writer, sheet_name="sectors_raw", index=False)
+            df_sector_rank.to_excel(writer, sheet_name="sector_rankings", index=False)
             df_pits.to_excel(writer, sheet_name="pit_raw", index=False)
+            df_pit_eff.to_excel(writer, sheet_name="pit_efficiency", index=False)
             df_stints.to_excel(writer, sheet_name="stints", index=False)
             df_kpi.to_excel(writer, sheet_name="generated_metrics", index=False)
             df_benchmark.to_excel(writer, sheet_name="benchmark_field", index=False)
@@ -121,6 +154,39 @@ class AnalyticsManager:
         lines.append(f"Session: {session_name}")
         lines.append(f"Circuit: {circuit}")
         lines.append(f"Weather: {weather} | Air: {air_temp} C | Track: {track_temp} C")
+        lines.append("")
+
+        # TLDR section to make output immediately actionable.
+        field_cons = 0.0
+        total_laps = 0
+        vehicle_count = 0
+        best_field = 0
+        avg_field = 0
+        if not kpi_df.empty and {"metric", "value"}.issubset(set(kpi_df.columns)):
+            kv = {str(r["metric"]): r["value"] for _, r in kpi_df.iterrows()}
+            field_cons = float(kv.get("field_mean_consistency_pct", 0.0) or 0.0)
+            total_laps = int(kv.get("total_laps", 0) or 0)
+            vehicle_count = int(kv.get("vehicle_count", 0) or 0)
+            best_field = int(kv.get("field_best_lap_ms", 0) or 0)
+            avg_field = int(kv.get("field_avg_of_avg_lap_ms", 0) or 0)
+
+        unstable_rate = 0.0
+        if not ai_driver_df.empty and "driver_ai_label" in ai_driver_df.columns:
+            total_ai = max(1, int(len(ai_driver_df)))
+            unstable = int((ai_driver_df["driver_ai_label"] == "unstable").sum())
+            unstable_rate = (unstable / total_ai) * 100.0
+
+        health_score = max(0.0, min(100.0, 100.0 - max(0.0, 90.0 - field_cons) * 0.9 - unstable_rate * 0.8))
+        health_band = self._score_band(health_score)
+
+        lines.append("TLDR")
+        lines.append("-" * 72)
+        lines.append(f"Session quality score: {health_score:.1f}/100 ({health_band})")
+        lines.append(f"Field consistency: {field_cons:.2f}% | Unstable drivers: {unstable_rate:.1f}%")
+        lines.append(f"Vehicles: {vehicle_count} | Total laps: {total_laps}")
+        if best_field > 0 and avg_field > 0:
+            spread = ((avg_field - best_field) / best_field) * 100.0
+            lines.append(f"Best field lap: {_fmt_td(timedelta(milliseconds=best_field))} | Pace spread: {spread:.1f}%")
         lines.append("")
 
         lines.append("FIELD SNAPSHOT")
@@ -209,12 +275,507 @@ class AnalyticsManager:
             lines.append(f"Stable: {stable} | Degrading: {degrading} | Improving: {improving} | Volatile: {volatile}")
 
         lines.append("")
+
+        lines.append("WHAT TO DO NEXT")
+        lines.append("-" * 72)
+        for action in self._build_action_items(
+            field_consistency=field_cons,
+            unstable_rate=unstable_rate,
+            stints_df=stints_df,
+            best_field_ms=best_field,
+            avg_field_ms=avg_field,
+        ):
+            lines.append(f"- {action}")
+        lines.append("")
+
         lines.append("NOTES")
         lines.append("-" * 72)
-        lines.append("This report is a quick reading layer of the full analytics workbook.")
-        lines.append("Use SessionAnalytics_*.xlsx sheets for detailed raw and computed values.")
+        lines.append("Open sheet 'executive_summary' first for plain language interpretation.")
+        lines.append("Then inspect raw sheets only when you need details.")
 
         return "\n".join(lines) + "\n"
+
+    def _score_band(self, score: float) -> str:
+        if score >= 80.0:
+            return "GREEN"
+        if score >= 60.0:
+            return "YELLOW"
+        return "RED"
+
+    def _build_action_items(
+        self,
+        field_consistency: float,
+        unstable_rate: float,
+        stints_df: pd.DataFrame,
+        best_field_ms: int,
+        avg_field_ms: int,
+    ) -> List[str]:
+        actions: List[str] = []
+
+        if field_consistency < 92.0:
+            actions.append("Focus on repeatability: run 5-lap blocks and target std dev under 1.2% of avg lap.")
+
+        if unstable_rate >= 30.0:
+            actions.append("Too many unstable drivers: verify tire warmup and reduce setup changes during the stint.")
+
+        if not stints_df.empty and "stint_label" in stints_df.columns:
+            total = max(1, int(len(stints_df)))
+            volatile = int((stints_df["stint_label"] == "volatile").sum())
+            degrading = int((stints_df["stint_label"] == "degrading").sum())
+            if (volatile / total) * 100.0 >= 25.0:
+                actions.append("Many volatile stints: review traffic release and braking references lap by lap.")
+            if (degrading / total) * 100.0 >= 30.0:
+                actions.append("Pace degradation detected: check tire pressure trend and brake temperature balance.")
+
+        if best_field_ms > 0 and avg_field_ms > 0:
+            spread = ((avg_field_ms - best_field_ms) / best_field_ms) * 100.0
+            if spread > 12.0:
+                actions.append("High pace spread: split drivers into pace groups and use differentiated targets.")
+
+        if not actions:
+            actions.append("Session quality is good: keep setup stable and refine only launch + sector 1 entries.")
+
+        return actions[:5]
+
+    def _build_executive_summary_df(
+        self,
+        summary_df: pd.DataFrame,
+        kpi_df: pd.DataFrame,
+        benchmark_df: pd.DataFrame,
+        ai_driver_df: pd.DataFrame,
+        stints_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        rows: List[Dict[str, Any]] = []
+
+        kv: Dict[str, Any] = {}
+        if not kpi_df.empty and {"metric", "value"}.issubset(set(kpi_df.columns)):
+            kv = {str(r["metric"]): r["value"] for _, r in kpi_df.iterrows()}
+
+        field_cons = float(kv.get("field_mean_consistency_pct", 0.0) or 0.0)
+        total_laps = int(kv.get("total_laps", 0) or 0)
+        vehicle_count = int(kv.get("vehicle_count", 0) or 0)
+        best_field = int(kv.get("field_best_lap_ms", 0) or 0)
+        avg_field = int(kv.get("field_avg_of_avg_lap_ms", 0) or 0)
+
+        unstable_rate = 0.0
+        if not ai_driver_df.empty and "driver_ai_label" in ai_driver_df.columns:
+            total_ai = max(1, int(len(ai_driver_df)))
+            unstable = int((ai_driver_df["driver_ai_label"] == "unstable").sum())
+            unstable_rate = (unstable / total_ai) * 100.0
+
+        health_score = max(0.0, min(100.0, 100.0 - max(0.0, 90.0 - field_cons) * 0.9 - unstable_rate * 0.8))
+        health_band = self._score_band(health_score)
+
+        rows.append({"section": "TLDR", "item": "session_quality_score", "value": round(health_score, 2), "comment": health_band})
+        rows.append({"section": "TLDR", "item": "field_consistency_pct", "value": round(field_cons, 2), "comment": "higher is better"})
+        rows.append({"section": "TLDR", "item": "unstable_drivers_pct", "value": round(unstable_rate, 2), "comment": "lower is better"})
+        rows.append({"section": "TLDR", "item": "vehicles", "value": vehicle_count, "comment": ""})
+        rows.append({"section": "TLDR", "item": "total_laps", "value": total_laps, "comment": ""})
+
+        if best_field > 0:
+            rows.append({"section": "Pace", "item": "field_best_lap", "value": _fmt_td(timedelta(milliseconds=best_field)), "comment": "reference"})
+        if avg_field > 0:
+            rows.append({"section": "Pace", "item": "field_avg_lap", "value": _fmt_td(timedelta(milliseconds=avg_field)), "comment": "excluding outlap"})
+        if best_field > 0 and avg_field > 0:
+            spread = ((avg_field - best_field) / best_field) * 100.0
+            rows.append({"section": "Pace", "item": "pace_spread_pct", "value": round(spread, 2), "comment": "lower is better"})
+
+        if not benchmark_df.empty:
+            top = benchmark_df.head(3)
+            for idx, (_, r) in enumerate(top.iterrows(), start=1):
+                did = int(r.get("driver_id", 0) or 0)
+                team = str(r.get("team", "") or "")
+                race_n = int(r.get("race_number", 0) or 0)
+                score = float(r.get("benchmark_score", 0.0) or 0.0)
+                drv_name = f"Driver {did}"
+                if not summary_df.empty and "driver_id" in summary_df.columns:
+                    m = summary_df[summary_df["driver_id"] == did]
+                    if not m.empty:
+                        s0 = m.iloc[0]
+                        drv_name = f"{str(s0.get('driver_name', '') or '').strip()} {str(s0.get('driver_surname', '') or '').strip()}".strip() or drv_name
+                rows.append(
+                    {
+                        "section": "Top performers",
+                        "item": f"P{idx}",
+                        "value": drv_name,
+                        "comment": f"#{race_n} team={team or 'n/a'} score={score:.2f}",
+                    }
+                )
+
+        for action in self._build_action_items(
+            field_consistency=field_cons,
+            unstable_rate=unstable_rate,
+            stints_df=stints_df,
+            best_field_ms=best_field,
+            avg_field_ms=avg_field,
+        ):
+            rows.append({"section": "Actions", "item": "next_step", "value": action, "comment": ""})
+
+        return pd.DataFrame(rows, columns=["section", "item", "value", "comment"])
+
+    def _build_lap_delta_df(self, laps_df: pd.DataFrame) -> pd.DataFrame:
+        if laps_df.empty:
+            return pd.DataFrame(
+                columns=[
+                    "driver_id",
+                    "race_number",
+                    "team",
+                    "lap_index",
+                    "lap_ms",
+                    "driver_best_lap_ms",
+                    "delta_to_driver_best_ms",
+                    "delta_to_field_best_ms",
+                ]
+            )
+
+        work = laps_df.copy()
+        work = work[work["lap_ms"] > 0]
+        if work.empty:
+            return pd.DataFrame(
+                columns=[
+                    "driver_id",
+                    "race_number",
+                    "team",
+                    "lap_index",
+                    "lap_ms",
+                    "driver_best_lap_ms",
+                    "delta_to_driver_best_ms",
+                    "delta_to_field_best_ms",
+                ]
+            )
+
+        work["driver_best_lap_ms"] = work.groupby("driver_id", dropna=False)["lap_ms"].transform("min")
+        field_best = int(work["lap_ms"].min()) if not work.empty else 0
+        work["delta_to_driver_best_ms"] = (work["lap_ms"] - work["driver_best_lap_ms"]).clip(lower=0)
+        work["delta_to_field_best_ms"] = (work["lap_ms"] - field_best).clip(lower=0)
+
+        cols = [
+            "driver_id",
+            "race_number",
+            "team",
+            "lap_index",
+            "lap_ms",
+            "driver_best_lap_ms",
+            "delta_to_driver_best_ms",
+            "delta_to_field_best_ms",
+        ]
+        return work[cols].sort_values(by=["driver_id", "lap_index"]).reset_index(drop=True)
+
+    def _build_sector_rankings_df(self, sectors_df: pd.DataFrame) -> pd.DataFrame:
+        if sectors_df.empty:
+            return pd.DataFrame(
+                columns=[
+                    "driver_id",
+                    "race_number",
+                    "team",
+                    "sector1_ms",
+                    "sector1_rank",
+                    "sector2_ms",
+                    "sector2_rank",
+                    "sector3_ms",
+                    "sector3_rank",
+                    "theoretical_best_lap_ms",
+                    "theoretical_rank",
+                ]
+            )
+
+        work = sectors_df.copy()
+        for col, rank_col in [
+            ("sector1_ms", "sector1_rank"),
+            ("sector2_ms", "sector2_rank"),
+            ("sector3_ms", "sector3_rank"),
+            ("theoretical_best_lap_ms", "theoretical_rank"),
+        ]:
+            s = work[col].where(work[col] > 0)
+            work[rank_col] = s.rank(method="min", ascending=True).fillna(0).astype(int)
+
+        cols = [
+            "driver_id",
+            "race_number",
+            "team",
+            "sector1_ms",
+            "sector1_rank",
+            "sector2_ms",
+            "sector2_rank",
+            "sector3_ms",
+            "sector3_rank",
+            "theoretical_best_lap_ms",
+            "theoretical_rank",
+        ]
+        return work[cols].sort_values(by=["theoretical_rank", "driver_id"]).reset_index(drop=True)
+
+    def _build_pit_efficiency_df(self, pits_df: pd.DataFrame) -> pd.DataFrame:
+        if pits_df.empty:
+            return pd.DataFrame(
+                columns=[
+                    "driver_id",
+                    "race_number",
+                    "team",
+                    "pit_count",
+                    "pit_total_ms",
+                    "pit_avg_ms",
+                    "pit_best_ms",
+                    "pit_worst_ms",
+                    "pit_consistency_pct",
+                ]
+            )
+
+        work = pits_df.copy()
+        work = work[work["pit_duration_ms"] > 0]
+        if work.empty:
+            return pd.DataFrame(
+                columns=[
+                    "driver_id",
+                    "race_number",
+                    "team",
+                    "pit_count",
+                    "pit_total_ms",
+                    "pit_avg_ms",
+                    "pit_best_ms",
+                    "pit_worst_ms",
+                    "pit_consistency_pct",
+                ]
+            )
+
+        grp = work.groupby(["driver_id", "race_number", "team"], dropna=False)
+        out = grp["pit_duration_ms"].agg(["count", "sum", "mean", "min", "max", "std"]).reset_index()
+        out = out.rename(
+            columns={
+                "count": "pit_count",
+                "sum": "pit_total_ms",
+                "mean": "pit_avg_ms",
+                "min": "pit_best_ms",
+                "max": "pit_worst_ms",
+                "std": "pit_std_ms",
+            }
+        )
+        out["pit_std_ms"] = out["pit_std_ms"].fillna(0.0)
+        out["pit_consistency_pct"] = (
+            (1.0 - (out["pit_std_ms"] / out["pit_avg_ms"].replace(0, pd.NA)))
+            .fillna(0.0)
+            .clip(lower=0.0, upper=1.0)
+            * 100.0
+        ).round(2)
+
+        out["pit_avg_ms"] = out["pit_avg_ms"].round(0).astype(int)
+        out["pit_std_ms"] = out["pit_std_ms"].round(0).astype(int)
+        out["pit_total_ms"] = out["pit_total_ms"].astype(int)
+        out["pit_best_ms"] = out["pit_best_ms"].astype(int)
+        out["pit_worst_ms"] = out["pit_worst_ms"].astype(int)
+
+        cols = [
+            "driver_id",
+            "race_number",
+            "team",
+            "pit_count",
+            "pit_total_ms",
+            "pit_avg_ms",
+            "pit_best_ms",
+            "pit_worst_ms",
+            "pit_consistency_pct",
+        ]
+        return out[cols].sort_values(by=["pit_avg_ms", "pit_count"], ascending=[True, False]).reset_index(drop=True)
+
+    def _build_consistency_trend_df(self, laps_df: pd.DataFrame) -> pd.DataFrame:
+        if laps_df.empty:
+            return pd.DataFrame(
+                columns=[
+                    "driver_id",
+                    "race_number",
+                    "team",
+                    "window_start_lap",
+                    "window_end_lap",
+                    "window_lap_count",
+                    "window_avg_ms",
+                    "window_std_ms",
+                    "window_consistency_pct",
+                ]
+            )
+
+        base = laps_df[(laps_df["lap_ms"] > 0) & (laps_df["is_outlap"] == 0)].copy()
+        if base.empty:
+            return pd.DataFrame(
+                columns=[
+                    "driver_id",
+                    "race_number",
+                    "team",
+                    "window_start_lap",
+                    "window_end_lap",
+                    "window_lap_count",
+                    "window_avg_ms",
+                    "window_std_ms",
+                    "window_consistency_pct",
+                ]
+            )
+
+        rows: List[Dict[str, Any]] = []
+        for (did, race_n, team), g in base.groupby(["driver_id", "race_number", "team"], dropna=False):
+            gg = g.sort_values(by="lap_index")
+            lap_vals = gg["lap_ms"].astype(int).tolist()
+            lap_idx = gg["lap_index"].astype(int).tolist()
+
+            window = 3
+            if len(lap_vals) < window:
+                avg_ms = int(sum(lap_vals) / len(lap_vals))
+                if len(lap_vals) > 1:
+                    mean = sum(lap_vals) / len(lap_vals)
+                    var = sum((v - mean) ** 2 for v in lap_vals) / len(lap_vals)
+                    std_ms = int(var ** 0.5)
+                else:
+                    std_ms = 0
+                cons = (1.0 - (std_ms / avg_ms)) * 100.0 if avg_ms > 0 else 0.0
+                rows.append(
+                    {
+                        "driver_id": int(did),
+                        "race_number": int(race_n),
+                        "team": str(team),
+                        "window_start_lap": int(lap_idx[0]),
+                        "window_end_lap": int(lap_idx[-1]),
+                        "window_lap_count": int(len(lap_vals)),
+                        "window_avg_ms": avg_ms,
+                        "window_std_ms": std_ms,
+                        "window_consistency_pct": round(max(0.0, min(100.0, cons)), 2),
+                    }
+                )
+                continue
+
+            for i in range(len(lap_vals) - window + 1):
+                chunk = lap_vals[i : i + window]
+                avg_ms = int(sum(chunk) / len(chunk))
+                mean = sum(chunk) / len(chunk)
+                var = sum((v - mean) ** 2 for v in chunk) / len(chunk)
+                std_ms = int(var ** 0.5)
+                cons = (1.0 - (std_ms / avg_ms)) * 100.0 if avg_ms > 0 else 0.0
+                rows.append(
+                    {
+                        "driver_id": int(did),
+                        "race_number": int(race_n),
+                        "team": str(team),
+                        "window_start_lap": int(lap_idx[i]),
+                        "window_end_lap": int(lap_idx[i + window - 1]),
+                        "window_lap_count": int(window),
+                        "window_avg_ms": avg_ms,
+                        "window_std_ms": std_ms,
+                        "window_consistency_pct": round(max(0.0, min(100.0, cons)), 2),
+                    }
+                )
+
+        return pd.DataFrame(rows)
+
+    def _build_web_insights_payload(
+        self,
+        now: datetime,
+        context: Dict[str, Any],
+        summary_df: pd.DataFrame,
+        kpi_df: pd.DataFrame,
+        benchmark_df: pd.DataFrame,
+        ai_df: pd.DataFrame,
+        ai_driver_df: pd.DataFrame,
+        stints_df: pd.DataFrame,
+        lap_delta_df: pd.DataFrame,
+        sector_rank_df: pd.DataFrame,
+        pit_eff_df: pd.DataFrame,
+        consistency_trend_df: pd.DataFrame,
+    ) -> Dict[str, Any]:
+        kv: Dict[str, Any] = {}
+        if not kpi_df.empty and {"metric", "value"}.issubset(set(kpi_df.columns)):
+            kv = {str(r["metric"]): r["value"] for _, r in kpi_df.iterrows()}
+
+        field_cons = float(kv.get("field_mean_consistency_pct", 0.0) or 0.0)
+        total_laps = int(kv.get("total_laps", 0) or 0)
+        vehicle_count = int(kv.get("vehicle_count", 0) or 0)
+        best_field = int(kv.get("field_best_lap_ms", 0) or 0)
+        avg_field = int(kv.get("field_avg_of_avg_lap_ms", 0) or 0)
+
+        unstable_rate = 0.0
+        if not ai_driver_df.empty and "driver_ai_label" in ai_driver_df.columns:
+            total_ai = max(1, int(len(ai_driver_df)))
+            unstable = int((ai_driver_df["driver_ai_label"] == "unstable").sum())
+            unstable_rate = (unstable / total_ai) * 100.0
+
+        health_score = max(0.0, min(100.0, 100.0 - max(0.0, 90.0 - field_cons) * 0.9 - unstable_rate * 0.8))
+
+        cards = [
+            {"id": "session_quality_score", "label": "Session quality", "value": round(health_score, 2), "unit": "/100", "band": self._score_band(health_score)},
+            {"id": "field_consistency_pct", "label": "Field consistency", "value": round(field_cons, 2), "unit": "%", "band": self._score_band(field_cons)},
+            {"id": "unstable_drivers_pct", "label": "Unstable drivers", "value": round(unstable_rate, 2), "unit": "%", "band": "GREEN" if unstable_rate < 20 else ("YELLOW" if unstable_rate < 35 else "RED")},
+            {"id": "vehicle_count", "label": "Vehicles", "value": vehicle_count, "unit": "", "band": "INFO"},
+            {"id": "total_laps", "label": "Total laps", "value": total_laps, "unit": "", "band": "INFO"},
+            {"id": "field_best_lap_ms", "label": "Best lap", "value": best_field, "unit": "ms", "band": "INFO"},
+            {"id": "field_avg_lap_ms", "label": "Field avg lap", "value": avg_field, "unit": "ms", "band": "INFO"},
+        ]
+
+        actions = self._build_action_items(
+            field_consistency=field_cons,
+            unstable_rate=unstable_rate,
+            stints_df=stints_df,
+            best_field_ms=best_field,
+            avg_field_ms=avg_field,
+        )
+
+        payload = {
+            "meta": {
+                "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "session_name": self._session_name(),
+                "session_type": int(getattr(self.race_man, "session_type", -1) or -1),
+                "session_status": int(getattr(self.race_man, "session_status", -1) or -1),
+                "is_race": bool(getattr(self.race_man, "race", False)),
+                "is_endurance": bool(getattr(self.race_man, "endurance", False)),
+                "circuit": {
+                    "id": context.get("circuit_id"),
+                    "name": context.get("circuit_name"),
+                    "location": context.get("circuit_location"),
+                    "track_length_m": context.get("track_length_m"),
+                    "sector1_m": context.get("sector1_m"),
+                    "sector2_m": context.get("sector2_m"),
+                    "sector3_m": context.get("sector3_m"),
+                },
+                "weather": {
+                    "state": context.get("weather_state"),
+                    "air_temp_c": context.get("air_temp_c"),
+                    "track_temp_c": context.get("track_temp_c"),
+                    "humidity_pct": context.get("humidity_pct"),
+                    "wind_kmh": context.get("wind_kmh"),
+                },
+            },
+            "cards": cards,
+            "actions": actions,
+            "leaderboard": self._records(benchmark_df.head(20)),
+            "drivers_summary": self._records(summary_df),
+            "lap_deltas": self._records(lap_delta_df),
+            "consistency_trend": self._records(consistency_trend_df),
+            "sector_rankings": self._records(sector_rank_df),
+            "pit_efficiency": self._records(pit_eff_df),
+            "anomalies": self._records(ai_df.head(300)),
+            "drivers_ai": self._records(ai_driver_df),
+            "stints": self._records(stints_df),
+        }
+        return self._json_safe(payload)
+
+    def _records(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        if df is None or df.empty:
+            return []
+        return [dict(x) for x in df.to_dict(orient="records")]
+
+    def _json_safe(self, data: Any) -> Any:
+        if isinstance(data, dict):
+            return {str(k): self._json_safe(v) for k, v in data.items()}
+        if isinstance(data, list):
+            return [self._json_safe(x) for x in data]
+        if isinstance(data, tuple):
+            return [self._json_safe(x) for x in data]
+        if isinstance(data, pd.Timestamp):
+            return data.isoformat()
+        if isinstance(data, timedelta):
+            return int(data.total_seconds() * 1000)
+        if pd.isna(data):
+            return None
+        try:
+            if hasattr(data, "item"):
+                return data.item()
+        except Exception:
+            pass
+        return data
 
     def _session_name(self) -> str:
         try:

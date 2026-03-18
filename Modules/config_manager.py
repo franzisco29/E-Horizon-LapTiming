@@ -84,6 +84,11 @@ class LiveConfig:
 
 
 @dataclass
+class StartingConfig:
+    manual_start: bool = True
+
+
+@dataclass
 class UIConfig:
     monitor_out: int = 0
 
@@ -98,6 +103,7 @@ class Settings:
     timing: TimingConfig = field(default_factory=TimingConfig)
     devices: DevicesConfig = field(default_factory=DevicesConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
+    starting: StartingConfig = field(default_factory=StartingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
 
     _path: Optional[Path] = None
@@ -231,6 +237,14 @@ class Settings:
     def monitor_out(self, value: int) -> None:
         self.ui.monitor_out = int(value)
 
+    @property
+    def manual_start(self) -> bool:
+        return self.starting.manual_start
+
+    @manual_start.setter
+    def manual_start(self, value: bool) -> None:
+        self.starting.manual_start = bool(value)
+
     # ----------------------------
     # Defaults (single source of truth)
     # ----------------------------
@@ -245,6 +259,7 @@ class Settings:
             timing=TimingConfig(debounce_ms=3000),
             devices=DevicesConfig(connection_type=0, tcp_port=20777, device_available="1,0,0,0,0,0"),
             live=LiveConfig(timing_enabled=True, tv_enabled=False, public_enabled=False, ip="127.0.0.1", port=8888),
+            starting=StartingConfig(manual_start=True),
             ui=UIConfig(monitor_out=0),
         )
 
@@ -291,6 +306,14 @@ class Settings:
         cfg.live.ip = str(data.get("live", {}).get("ip", cfg.live.ip))
         cfg.live.port = int(data.get("live", {}).get("port", cfg.live.port))
 
+        starting_section = data.get("starting", {}) or {}
+        cfg.starting.manual_start = bool(
+            starting_section.get(
+                "manual_start",
+                starting_section.get("manual", starting_section.get("start_manual", cfg.starting.manual_start)),
+            )
+        )
+
         cfg.ui.monitor_out = int(data.get("ui", {}).get("monitor_out", cfg.ui.monitor_out))
 
         cfg.validate_and_fix()
@@ -324,6 +347,9 @@ class Settings:
                 "public_enabled": self.live.public_enabled,
                 "ip": self.live.ip,
                 "port": self.live.port,
+            },
+            "starting": {
+                "manual_start": self.starting.manual_start,
             },
             "ui": {
                 "monitor_out": self.ui.monitor_out,

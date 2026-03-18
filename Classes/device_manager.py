@@ -65,6 +65,7 @@ class DeviceManager:
         DeviceNames.ATOUT,
     )
     MAX_DEVICES: int = len(DEVICE_NAMES)
+    _VALID_TCP_COMMANDS: set[str] = {c.value for c in DeviceCommand}
 
     # Simulazione transponder (legacy: (number, device))
     _transponder_simulated_listeners: List[Callable[[int, int], None]] = []
@@ -132,6 +133,7 @@ class DeviceManager:
         # callbacks
         self.on_transponder_received: Optional[Callable[[str, int], None]] = None
         self.on_transponder_received_index: Optional[Callable[[int, int], None]] = None  # NEW
+        self.on_command_received: Optional[Callable[[str, str], None]] = None
         self.on_log: Optional[Callable[[str], None]] = None
 
         self._handshake_delay_s = max(0.0, handshake_delay_ms / 1000.0)
@@ -362,6 +364,25 @@ class DeviceManager:
                             self._log("CALLBACK", "Callback index OK")
                         except Exception as ex:
                             self._log("CALLBACK", f"Callback index error: {ex}")
+
+                elif line.startswith("F:"):
+                    # Protocollo comandi TCP in formato stringa: F:<CMD>
+                    cmd_value = line.split(":", 1)[1].strip()
+                    if not cmd_value:
+                        self._log("PARSER", f"{dev.device_id}: invalid F format (empty command): '{line}'")
+                        continue
+
+                    if cmd_value not in self._VALID_TCP_COMMANDS:
+                        self._log("PARSER", f"{dev.device_id}: unknown F command '{cmd_value}'")
+                        continue
+
+                    self._log("PARSER", f"F OK: device_id={dev.device_id} command={cmd_value}")
+
+                    if self.on_command_received:
+                        try:
+                            self.on_command_received(dev.device_id, cmd_value)
+                        except Exception as ex:
+                            self._log("CALLBACK", f"Command callback error: {ex}")
 
                 else:
                     self._log("RX", f"{dev.device_id}: unhandled frame '{line}'")

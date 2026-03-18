@@ -41,6 +41,7 @@ from Classes.result_manager import ResultManager
 from Classes.analytics_manager import AnalyticsManager
 from Classes.session import SessionState, SESSION_NAMES
 from Modules.enums import RaceState
+# from Modules.sound_utils import beep_do, beep_lights_out
 from Classes.roadster import Roadster
 from UI.ResultPreviewWindow.result_preview_window import ResultPreviewWindow
 from UI.AnalyticsSetupDialog.analytics_setup_dialog import AnalyticsSetupDialog
@@ -121,6 +122,12 @@ class RaceManagerWindow(QWidget):
         self._pre_timer = QTimer(self)
         self._pre_timer.setInterval(1000)
         self._pre_timer.timeout.connect(self._on_pre_race_tick)
+
+        # manual start lights sequence timer (S1..S5 ogni 1s)
+        self._lights_step: int = 0
+        self._lights_timer = QTimer(self)
+        self._lights_timer.setInterval(1000)
+        self._lights_timer.timeout.connect(self._on_lights_tick)
 
         # Startup status polling (no freeze)
         self._startup_win: Optional[StatusWindow] = None
@@ -891,6 +898,10 @@ class RaceManagerWindow(QWidget):
             # VB: DeviceMan.Broadcast(DeviceCommand.START_CMD)
             self.device_man.broadcast(DeviceCommand.START_CMD.value)
 
+            # Lights Out beep (SOL, 2s) — solo se manual start
+            # if bool(getattr(self.settings, "manual_start", True)):
+            #     beep_lights_out()
+
             # VB: posTimer.Start()
             self._pos_timer.start()
 
@@ -909,7 +920,7 @@ class RaceManagerWindow(QWidget):
             self.race_man.stop_session()
 
             # VB: StartBT.Text = "Continue"
-            self.refs.start_btn.setText("Continue")
+            self.refs.start_btn.setText("Resume")
 
             # VB: If raceMan.SessionType > 0 Then SesTimer.Stop()
             # In Python, session_type sta in race_man.session.session_type
@@ -982,22 +993,38 @@ class RaceManagerWindow(QWidget):
         # STARTING  (VB Starting)  -> pre-race semaforo / start procedure
         # ------------------------------------------------------------
         elif act_state == SessionState.Starting:
-            # VB: DeviceMan.SendCommand(DeviceCommand.START_PROC_CMD, Sem)
-            # Nel tuo DeviceCommand non vedo START_PROC: se esiste con altro nome, mappalo.
+            manual_start_enabled = bool(getattr(self.settings, "manual_start", True))
 
-            self.device_man.send_command(DeviceCommand.START_PROC_CMD.value, DeviceManager.DevicesIDs.Sem)  # type: ignore
+            if manual_start_enabled:
+                # Manual mode: fire S1..S5 lights every second with a DO beep.
+                # On Lights Out (second click, NotStarted) the session actually starts.
+                self._lights_step = 1
+                self._lights_timer.stop()
 
+                # Fire first light immediately to avoid perceived 1s startup lag.
+                self.device_man.send_command(DeviceCommand.START_LIGHT_1_CMD.value, DeviceManager.DevicesIDs.Sem)  # type: ignore
+                # beep_do()
+                log("[RaceWindow] Lights sequence: S1 sent")
 
-            # VB: StartBT.Text = "Lights Out"
-            self.refs.start_btn.setText("Lights Out")
+                self._lights_timer.start()
 
-            # VB: raceMan.SessionStatus = 0  (NotStarted)
-            try:
-                self.race_man.session_status = int(SessionState.NotStarted)
-            except Exception:
-                pass
+                self.refs.start_btn.setEnabled(False)
+                self.refs.start_btn.setText("Sequenza luci…")
 
-            log("Session STARTING -> Lights Out")
+                log("Session STARTING (manual) -> lights sequence started")
+            else:
+                # Automatic mode: trigger auto start procedure on semaphore device.
+                self.device_man.send_command(DeviceCommand.START_AUTO_CMD.value, DeviceManager.DevicesIDs.Sem)  # type: ignore
+
+                # First click only arms/sequences semaphore; second click starts the session.
+                self.refs.start_btn.setText("Start Session")
+                try:
+                    self.race_man.session_status = int(SessionState.NotStarted)
+                except Exception:
+                    log("Session STARTING (auto) failed to switch status")
+                    return
+
+                log("Session STARTING (auto) -> START_AUTO command sent")
 
         # ------------------------------------------------------------
         # STOPPED  (VB Stopped)
@@ -1360,6 +1387,43 @@ class RaceManagerWindow(QWidget):
     # Pre-race (base + log; poi lo portiamo 1:1 VB nel prossimo step)
     # ------------------------------------------------------------
     @Slot()
+    # ------------------------------------------------------------
+    # MANUAL START LIGHTS SEQUENCE (S1..S5 + beep DO, then Lights Out ready)
+    # ------------------------------------------------------------
+    def _on_lights_tick(self) -> None:
+        """Called every second during the manual start sequence."""
+        if not (self.race_man and self.device_man):
+            self._lights_timer.stop()
+            return
+
+        self._lights_step += 1
+        step = self._lights_step
+
+        _light_cmds = [
+            DeviceCommand.START_LIGHT_1_CMD,
+            DeviceCommand.START_LIGHT_2_CMD,
+            DeviceCommand.START_LIGHT_3_CMD,
+            DeviceCommand.START_LIGHT_4_CMD,
+            DeviceCommand.START_LIGHT_5_CMD,
+        ]
+
+        if 1 <= step <= 5:
+            cmd = _light_cmds[step - 1]
+            self.device_man.send_command(cmd.value, DeviceManager.DevicesIDs.Sem)  # type: ignore
+            # beep_do()
+            log(f"[RaceWindow] Lights sequence: S{step} sent")
+
+        if step >= 5:
+            # All lights on: enable button for Lights Out
+            self._lights_timer.stop()
+            try:
+                self.race_man.session_status = int(SessionState.NotStarted)
+            except Exception:
+                pass
+            self.refs.start_btn.setEnabled(True)
+            self.refs.start_btn.setText("Lights Out")
+            log("[RaceWindow] Lights sequence complete -> waiting for Lights Out click")
+
     def _on_pre_race_clicked(self) -> None:
         if not (self.race_man and self.device_man):
             return
@@ -1898,6 +1962,10 @@ class RaceManagerWindow(QWidget):
             if report_path:
                 log(f"[RaceWindow] Analytics report generated: {report_path}")
 
+            web_payload_path = getattr(analytics_manager, "last_web_payload_path", None)
+            if web_payload_path:
+                log(f"[RaceWindow] Analytics web payload generated: {web_payload_path}")
+
             try:
                 os.startfile(str(analytics_xlsx))
             except Exception as e:
@@ -1908,6 +1976,12 @@ class RaceManagerWindow(QWidget):
                     os.startfile(str(report_path))
                 except Exception as e:
                     log(f"[RaceWindow] Cannot open analytics report: {e}")
+
+            if web_payload_path:
+                try:
+                    os.startfile(str(web_payload_path))
+                except Exception as e:
+                    log(f"[RaceWindow] Cannot open analytics web payload: {e}")
         except Exception as analytics_err:
             log(f"[RaceWindow] Analytics export ERROR: {type(analytics_err).__name__}: {analytics_err}")
             log(traceback.format_exc())

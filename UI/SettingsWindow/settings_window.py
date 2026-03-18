@@ -41,8 +41,11 @@ class SettingsWindow(QDialog):
         r.save_btn.clicked.connect(self._save)
 
         r.live_check.stateChanged.connect(self._live_toggle)
+        r.live_check.stateChanged.connect(self._refresh_summary)
+        r.manual_start_check.stateChanged.connect(self._refresh_summary)
         r.tv_tower_check.stateChanged.connect(lambda _s: None)
         r.conn_type_combo.currentIndexChanged.connect(self._conn_type_changed)
+        r.conn_type_combo.currentIndexChanged.connect(self._refresh_summary)
         r.debug_check.stateChanged.connect(lambda _s: None)
 
         r.browse_btn.clicked.connect(self._browse_folder)
@@ -57,6 +60,7 @@ class SettingsWindow(QDialog):
         r.live_check.setChecked(bool(self.settings.live_enabled))
         r.tv_tower_check.setChecked(bool(self.settings.tv_enabled))
         r.live_public_check.setChecked(bool(getattr(self.settings, "live_public_enabled", False)))
+        r.manual_start_check.setChecked(bool(getattr(self.settings, "manual_start", True)))
 
         # Monitor list
         r.monitor_combo.clear()
@@ -88,6 +92,7 @@ class SettingsWindow(QDialog):
         self._apply_feature_availability()
         self._live_toggle()
         self._conn_type_changed()
+        self._refresh_summary()
 
     def _apply_permissions(self) -> None:
         # VB: admin=0 -> disabilita quasi tutto
@@ -100,6 +105,7 @@ class SettingsWindow(QDialog):
             r.debug_check.setEnabled(False)
             r.conn_type_combo.setEnabled(False)
             r.debounce_edit.setEnabled(False)
+            r.manual_start_check.setEnabled(False)
             r.root_path_edit.setEnabled(False)
             r.browse_btn.setEnabled(False)
             r.tv_tower_check.setEnabled(False)
@@ -133,6 +139,26 @@ class SettingsWindow(QDialog):
         r.tcp_box.setToolTip(
             "" if is_tcp else "Abilita 'Comunicazione: TCP' per modificare questi parametri."
         )
+
+    def _refresh_summary(self) -> None:
+        r = self.ui.refs
+
+        conn_map = {
+            0: "NONE",
+            1: "TCP",
+            2: "SERIAL",
+            3: "WIFIUDP",
+        }
+
+        conn_mode = conn_map.get(int(r.conn_type_combo.currentIndex()), "UNKNOWN")
+        start_mode = "Manuale" if r.manual_start_check.isChecked() else "Automatico"
+        live_mode = "Attivo" if r.live_check.isChecked() else "Disattivo"
+        profile_mode = "Admin" if int(self.settings.admin) != 0 else "User"
+
+        r.summary_conn_value.setText(conn_mode)
+        r.summary_start_value.setText(start_mode)
+        r.summary_live_value.setText(live_mode)
+        r.summary_profile_value.setText(profile_mode)
 
 
     # -------------------------
@@ -188,6 +214,7 @@ class SettingsWindow(QDialog):
         self.settings.live_enabled = bool(r.live_check.isChecked())
         self.settings.connection_type = int(r.conn_type_combo.currentIndex())
         self.settings.debounce_ms = debounce
+        self.settings.manual_start = bool(r.manual_start_check.isChecked())
         self.settings.tcp_port = tcp_port
         self.settings.monitor_out = int(r.monitor_combo.currentIndex())
 
