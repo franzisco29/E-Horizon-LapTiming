@@ -11,11 +11,11 @@ devices:
   tcp_port: 20777
   device_available: 1,0,0,0,0,0
 live:
-  enabled: false
-  timing_enabled: false
+  enabled: true
+  timing_enabled: true
   tv_Enabled: false
   public_enabled: false
-  ip: 127.0.0.1
+  ip: 0.0.0.0
   port: 8888
 ui:
   monitor_out: 0

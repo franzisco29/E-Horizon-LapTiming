@@ -1,0 +1,10 @@
+version: 3
+agent:
+  authtoken: ${NGROK_AUTHTOKEN}
+  
+tunnels:
+  live-timing:
+    addr: 127.0.0.1:8000
+    proto: http
+    domain: alphonso-supersacerdotal-tomboyishly.ngrok-free.dev
+    metadata: "Live Timing Hub"

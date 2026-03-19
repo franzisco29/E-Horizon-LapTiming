@@ -66,6 +66,10 @@ class DeviceManager:
     )
     MAX_DEVICES: int = len(DEVICE_NAMES)
     _VALID_TCP_COMMANDS: set[str] = {c.value for c in DeviceCommand}
+    _TCP_COMMAND_ALIASES: dict[str, str] = {
+        "VSC": DeviceCommand.VIRTUAL_SC_CMD.value,
+    }
+    _SPECIAL_TCP_COMMANDS: set[str] = {"STP"}
 
     # Simulazione transponder (legacy: (number, device))
     _transponder_simulated_listeners: List[Callable[[int, int], None]] = []
@@ -367,16 +371,22 @@ class DeviceManager:
 
                 elif line.startswith("F:"):
                     # Protocollo comandi TCP in formato stringa: F:<CMD>
-                    cmd_value = line.split(":", 1)[1].strip()
+                    cmd_value = line.split(":", 1)[1].strip().upper()
                     if not cmd_value:
                         self._log("PARSER", f"{dev.device_id}: invalid F format (empty command): '{line}'")
                         continue
 
-                    if cmd_value not in self._VALID_TCP_COMMANDS:
+                    normalized_cmd = self._TCP_COMMAND_ALIASES.get(cmd_value, cmd_value)
+
+                    is_known = (
+                        normalized_cmd in self._VALID_TCP_COMMANDS
+                        or cmd_value in self._SPECIAL_TCP_COMMANDS
+                    )
+                    if not is_known:
                         self._log("PARSER", f"{dev.device_id}: unknown F command '{cmd_value}'")
                         continue
 
-                    self._log("PARSER", f"F OK: device_id={dev.device_id} command={cmd_value}")
+                    self._log("PARSER", f"F OK: device_id={dev.device_id} command={cmd_value} normalized={normalized_cmd}")
 
                     if self.on_command_received:
                         try:

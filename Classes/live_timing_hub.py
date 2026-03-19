@@ -480,16 +480,14 @@ boot();
         if self._ngrok_proc and self._ngrok_proc.poll() is None:
             return
 
-        # Use explicit 127.0.0.1 to avoid IPv6 resolution issues on Windows
-        # (ngrok resolves "localhost" as [::1] but uvicorn may listen on 127.0.0.1 only)
-        upstream = f"http://127.0.0.1:{self.port}"
+        # Use ngrok start --all to consolidate multiple tunnels in a single agent session.
+        # This avoids hitting the 3 simultaneous sessions limit on free tier.
+        # Tunnels are defined in ngrok.yml (located in ~/.ngrok2/ngrok.yml)
+        # (See: https://ngrok.com/docs/agent/config/)
         cmd = [
             "ngrok",
-            "http",
-            upstream,
-            "--url",
-            PUBLIC_TUNNEL_DOMAIN,
-            "--pooling-enabled",
+            "start",
+            "--all",
         ]
 
         env = os.environ.copy()
@@ -509,7 +507,8 @@ boot();
                 env=env,
                 creationflags=creationflags,
             )
-            log(f"[LiveTiming] Public URL: https://{PUBLIC_TUNNEL_DOMAIN} -> http://{self.address}:{self.port}")
+            log(f"[LiveTiming] ngrok agent started (configuration: ~/.ngrok2/ngrok.yml)")
+            log(f"[LiveTiming] Public URL: https://{PUBLIC_TUNNEL_DOMAIN}")
 
             self._ngrok_log_thread = threading.Thread(
                 target=self._consume_ngrok_logs,

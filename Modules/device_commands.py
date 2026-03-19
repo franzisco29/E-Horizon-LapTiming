@@ -172,6 +172,7 @@ class DeviceCommand(str, Enum):
     # Safety
     SAFETY_CAR_CMD  = CMD_SAFETY_CAR
     VIRTUAL_SC_CMD  = CMD_VIRTUAL_SC
+    VSC_CMD         = CMD_VIRTUAL_SC
     FULL_YELLOW_CMD = CMD_VIRTUAL_SC    # 'F' nel protocollo 1-char
 
     # Pit

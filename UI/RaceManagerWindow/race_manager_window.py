@@ -70,6 +70,7 @@ class RaceManagerWindow(QWidget):
     sig_transponder = Signal(int, int)
     sig_status = Signal(list)
     sig_log = Signal(str)
+    sig_command = Signal(str, str)
 
     def __init__(self, settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -201,6 +202,7 @@ class RaceManagerWindow(QWidget):
     def _bind_signals(self) -> None:
         self.sig_transponder.connect(self._on_transponder_gui_thread)
         self.sig_log.connect(self._on_log_gui_thread)
+        self.sig_command.connect(self._on_command_gui_thread)
 
     @Slot(str)
     def _on_log_gui_thread(self, msg: str) -> None:
@@ -419,6 +421,7 @@ class RaceManagerWindow(QWidget):
         self.device_man = DeviceManager(ip, tcp_port, conn_type, active_flags)
         self.device_man.on_log = self._cb_log
         self.device_man.on_transponder_received_index = self._cb_transponder
+        self.device_man.on_command_received = self._cb_command
         type(self.device_man).add_transponder_simulated_index_listener(self._cb_transponder)
 
         # UI session info
@@ -465,6 +468,91 @@ class RaceManagerWindow(QWidget):
 
     def _cb_transponder(self, device_id: int, number: int) -> None:
         self.sig_transponder.emit(int(device_id), int(number))
+
+    def _cb_command(self, device_id: str, cmd: str) -> None:
+        self.sig_command.emit(str(device_id), str(cmd))
+
+    @Slot(str, str)
+    def _on_command_gui_thread(self, device_id: str, cmd: str) -> None:
+        command = str(cmd or "").strip().upper()
+        if not command:
+            return
+
+        log(f"[RaceWindow] [DeviceCmd] from {device_id}: {command}")
+
+        if command == DeviceCommand.RED_FLAG_CMD.value:
+            self._on_red_clicked()
+            return
+
+        if command == DeviceCommand.GREEN_FLAG_CMD.value:
+            self._on_green_clicked()
+            return
+
+        if command == DeviceCommand.WET_RACE_CMD.value:
+            self._on_wet_clicked()
+            return
+
+        if command == DeviceCommand.CMD_YELLOW_S1.value:
+            self._toggle_yellow(0)
+            return
+
+        if command == DeviceCommand.CMD_YELLOW_S2.value:
+            self._toggle_yellow(1)
+            return
+
+        if command == DeviceCommand.CMD_YELLOW_S3.value:
+            self._toggle_yellow(2)
+            return
+
+        if command == DeviceCommand.SAFETY_CAR_CMD.value:
+            self._on_sc_clicked()
+            return
+
+        if command == DeviceCommand.VSC_CMD.value:
+            self._on_vsc_clicked()
+            return
+
+        if command == DeviceCommand.CLC_CMD.value:
+            self._on_clear_clicked()
+            return
+
+        if command == DeviceCommand.START_PROC_CMD.value:
+            if not self.race_man:
+                return
+
+            try:
+                current_state = SessionState(int(getattr(self.race_man, "session_status", SessionState.NotStarted)))
+            except Exception:
+                current_state = SessionState.NotStarted
+
+            if current_state != SessionState.NotStarted:
+                log(f"[RaceWindow] [DeviceCmd] SP ignored: session_status={current_state}")
+                return
+
+            # START_PROC_CMD dal device = click virtuale su Start per avviare la fase luci.
+            self._on_start_clicked()
+            log("[RaceWindow] [DeviceCmd] SP -> virtual Start click")
+            return
+
+        if command == DeviceCommand.LIGHTS_OUT_CMD.value:
+            if not self.race_man:
+                return
+
+            try:
+                current_state = SessionState(int(getattr(self.race_man, "session_status", SessionState.NotStarted)))
+            except Exception:
+                current_state = SessionState.NotStarted
+
+            if current_state != SessionState.Starting:
+                log(f"[RaceWindow] [DeviceCmd] LO ignored: session_status={current_state}")
+                return
+
+            # LIGHTS_OUT_CMD dal device = click virtuale su Lights Out/Start.
+            self._on_start_clicked()
+            log("[RaceWindow] [DeviceCmd] LO -> virtual Lights Out click")
+            return
+
+        log(f"[RaceWindow] [DeviceCmd] unsupported command ignored: {command}")
 
     # ------------------------------------------------------------
     # LOAD (DB -> RaceList -> Table) -- OK DO NOT TOUCH
@@ -1002,7 +1090,7 @@ class RaceManagerWindow(QWidget):
                 self._lights_timer.stop()
 
                 # Fire first light immediately to avoid perceived 1s startup lag.
-                self.device_man.send_command(DeviceCommand.START_LIGHT_1_CMD.value, DeviceManager.DevicesIDs.Sem)  # type: ignore
+                self.device_man.broadcast(DeviceCommand.START_LIGHT_1_CMD.value)  # type: ignore
                 # beep_do()
                 log("[RaceWindow] Lights sequence: S1 sent")
 
@@ -1014,7 +1102,7 @@ class RaceManagerWindow(QWidget):
                 log("Session STARTING (manual) -> lights sequence started")
             else:
                 # Automatic mode: trigger auto start procedure on semaphore device.
-                self.device_man.send_command(DeviceCommand.START_AUTO_CMD.value, DeviceManager.DevicesIDs.Sem)  # type: ignore
+                self.device_man.broadcast(DeviceCommand.START_AUTO_CMD.value)  # type: ignore
 
                 # First click only arms/sequences semaphore; second click starts the session.
                 self.refs.start_btn.setText("Start Session")
@@ -1409,7 +1497,7 @@ class RaceManagerWindow(QWidget):
 
         if 1 <= step <= 5:
             cmd = _light_cmds[step - 1]
-            self.device_man.send_command(cmd.value, DeviceManager.DevicesIDs.Sem)  # type: ignore
+            self.device_man.broadcast(cmd.value)  # type: ignore
             # beep_do()
             log(f"[RaceWindow] Lights sequence: S{step} sent")
 
