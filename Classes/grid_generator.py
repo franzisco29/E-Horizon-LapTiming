@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -235,6 +236,61 @@ class GridGenerator:
 
         self._render_grid_page(c, endurance_clean, "ENDURANCE FINAL GRID", endurance=True, logo_path=logo_path)
         c.save()
+
+        # Salva le tre griglie in JSON (come i result_json dei risultati)
+        self.save_grids_json(
+            final_grid=final_grid_with_penalties,
+            sprint_grid=sprint_grid,
+            endurance_grid=endurance_clean,
+            output_path=output_path,
+        )
+    # ----------------------------
+    # JSON export
+    # ----------------------------
+    @staticmethod
+    def _grid_driver_to_dict(d: GridDriver) -> dict:
+        return {
+            "position": d.position,
+            "name": d.name,
+            "surname": d.surname,
+            "number": d.race_number,
+            "team": d.team,
+            "bestLap": d.best_lap,
+            "gridDrop": d.grid_drop,
+            "pitLaneStart": d.pit_lane_start,
+            "basePosition": d.base_position,
+        }
+
+    def save_grids_json(
+        self,
+        final_grid: list[GridDriver],
+        sprint_grid: list[GridDriver],
+        endurance_grid: list[GridDriver],
+        output_path: str | Path,
+    ) -> None:
+        """Salva le tre griglie come JSON in <output_path.parent>/grid_json/."""
+        grid_json_dir = Path(output_path).parent / "grid_json"
+        grid_json_dir.mkdir(parents=True, exist_ok=True)
+
+        now = datetime.now()
+        timestamp = now.strftime("%d-%m-%Y")
+        date_iso = now.strftime("%Y-%m-%dT%H:%M:%S")
+
+        grids = [
+            ("FINAL", "FINAL STARTING GRID", final_grid),
+            ("SPRINT", "SPRINT STARTING GRID", sprint_grid),
+            ("ENDURANCE", "ENDURANCE FINAL GRID", endurance_grid),
+        ]
+
+        for key, label, grid in grids:
+            data = {
+                "gridType": label,
+                "date": date_iso,
+                "drivers": [self._grid_driver_to_dict(d) for d in grid],
+            }
+            filename = grid_json_dir / f"Grid_{key}_{timestamp}.json"
+            filename.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
     # ----------------------------
     # Rendering helpers
     # ----------------------------

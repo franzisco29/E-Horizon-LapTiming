@@ -24,24 +24,35 @@ class HomeWindow(QWidget):
         self.setMinimumSize(self.ui.root.minimumSize())
         self.setWindowTitle(self.ui.root.windowTitle())
         self.setStyleSheet(self.ui.root.styleSheet())
-        
-        # 3. Inizializzazione dati (Settings)
-        # Usiamo load_default() che gestisce automaticamente path e creazione file
-        log("HomeWindow loading settings...")
-        self.settings = Settings.load_default()
-
-        # Icona applicazione (usa root_path dalle settings)
-        load_favicon(root_path=self.settings.root_path)
 
         # 4. Connessione Eventi
         log("HomeWindow wiring events...")
         self._wire_events()
+        self.settings = None
+        self._set_navigation_enabled(False)
+        QTimer.singleShot(0, self._load_settings_deferred)
 
         # 5. Gestione Avvio Sicuro (Anti-Crash COM)
         # Delay di 500ms per stabilità Windows/Rendering
         QTimer.singleShot(500, self._on_startup_stable)
 
         log("HomeWindow.__init__ EXIT")
+
+    def _set_navigation_enabled(self, enabled: bool) -> None:
+        self.ui.bt_settings_small.setEnabled(enabled)
+        self.ui.bt_race_manager.setEnabled(enabled)
+        self.ui.bt_driver_manager.setEnabled(enabled)
+        self.ui.bt_circuits.setEnabled(enabled)
+        self.ui.bt_grid.setEnabled(enabled)
+        self.ui.bt_new_list.setEnabled(enabled)
+        self.ui.bt_roadsters.setEnabled(enabled)
+
+    def _load_settings_deferred(self) -> None:
+        log("HomeWindow loading settings...")
+        self.settings = Settings.load_default()
+        load_favicon(root_path=self.settings.root_path)
+        self._set_navigation_enabled(True)
+        log("HomeWindow settings loaded")
 
     def _on_startup_stable(self):
         """Eseguito quando l'interfaccia è visibile e la COM è pronta."""

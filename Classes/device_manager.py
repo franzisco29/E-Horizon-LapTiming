@@ -30,6 +30,7 @@ class DeviceManager:
         Sem = 5
         AttZoneIn = 6
         AttZoneOut = 7
+        RacePanel = 8
 
     class DeviceNames:
         LAP_DONE = "Lap Done"
@@ -40,6 +41,7 @@ class DeviceManager:
         SEM = "Semaforo"
         ATIN = "Att. Zone in"
         ATOUT = "Att. Zone Out"
+        RACEPANEL = "Race Panel"
 
     """
     VB DeviceManager -> Python
@@ -63,8 +65,11 @@ class DeviceManager:
         DeviceNames.SEM,
         DeviceNames.ATIN,
         DeviceNames.ATOUT,
+        DeviceNames.RACEPANEL,
     )
     MAX_DEVICES: int = len(DEVICE_NAMES)
+    # Device accettati sempre alla connessione, indipendentemente da active_flags
+    _ALWAYS_ACCEPTED_IDS: frozenset[int] = frozenset({DevicesIDs.RacePanel})
     _VALID_TCP_COMMANDS: set[str] = {c.value for c in DeviceCommand}
     _TCP_COMMAND_ALIASES: dict[str, str] = {
         "VSC": DeviceCommand.VIRTUAL_SC_CMD.value,
@@ -106,6 +111,7 @@ class DeviceManager:
         port: int = 20777,
         conn_type: Union[int, ConnectionTypes] = ConnectionTypes.TCP,
         active_flags: Optional[Sequence[bool]] = None,
+        debug_log: bool = False,
         handshake_delay_ms: int = 250,
         # debug: timeouts per evitare blocchi "muti"; None -> no timeout
         accept_timeout_s: Optional[float] = None,
@@ -114,6 +120,7 @@ class DeviceManager:
         self.ip = ip
         self.port = port
         self.conn_type = ConnectionTypes(int(conn_type))
+        self.debug_log = bool(debug_log)
 
         # flags: se ne arrivano meno di MAX_DEVICES, le mancanti diventano False
         if active_flags is None:
@@ -414,22 +421,23 @@ class DeviceManager:
     # -------------------------
     # Commands
     # -------------------------
-    def send_command(self, command: Union[str, DeviceCommand], device_id: str) -> None:
+    def send_command(self, command: Union[str, DeviceCommand], device_id: Union[str, int]) -> None:
         if self.conn_type == ConnectionTypes.NONE:
             self._log("TX", f"NONE: command '{command}' not sent")
             return
 
         cmd_str = command.value if isinstance(command, DeviceCommand) else str(command)
+        dev_key = f"D{int(device_id)}" if isinstance(device_id, (int, IntEnum)) else device_id
 
         with self._lock:
-            dev = self._devices.get(device_id)
+            dev = self._devices.get(dev_key)
             if dev is None:
-                self._log("TX", f"{device_id} not connected -> cmd '{cmd_str}' not sent")
+                self._log("TX", f"{dev_key} not connected -> cmd '{cmd_str}' not sent")
                 return
 
             try:
                 dev.send_line(cmd_str)
-                self._log("TX", f"{device_id} <- '{cmd_str}'")
+                self._log("TX", f"{dev_key} <- '{cmd_str}'")
             except Exception as ex:
                 self._log("TX", f"{device_id}: send error '{cmd_str}': {ex}")
 
@@ -494,6 +502,9 @@ class DeviceManager:
     # Logging
     # -------------------------
     def _log(self, tag: str, msg: str) -> None:
+        if (not self.debug_log) and tag in {"RXLOOP", "RX", "PARSER", "CALLBACK"}:
+            return
+
         line = f"[{tag}] {msg}"
 
         if self.on_log:
@@ -515,11 +526,15 @@ class DeviceManager:
             status_list = []
             for i, name in enumerate(self.DEVICE_NAMES):
                 dev_id = f"D{i}"
-                if i >= len(self.active_flags) or not self.active_flags[i]:
+                always_accepted = i in self._ALWAYS_ACCEPTED_IDS
+                active = always_accepted or (i < len(self.active_flags) and self.active_flags[i])
+                if not active:
                     status_list.append(f"Device ID {i} - {name} - Non attivato dall'utente")
                 elif dev_id in self._devices:
                     ip = self._devices[dev_id].ip
                     status_list.append(f"Device ID {i} - {name} - Connesso da IP {ip}")
+                elif always_accepted:
+                    status_list.append(f"Device ID {i} - {name} - In attesa (opzionale)")
                 else:
                     status_list.append(f"Device ID {i} - {name} - In attesa di connessione...")
             return status_list

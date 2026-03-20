@@ -108,6 +108,7 @@ class RaceManagerWindow(QWidget):
         self.red_flag_out = False
         self.old_cmd: str = DeviceCommand.CLC_CMD.value
         self.old_pre_cmd: str = DeviceCommand.PRE_RACE_CMD.value
+        self._old_endurance: Optional[bool] = None
         self._last_sel = _LastSelection()
         self._analytics_context_cache: Dict[str, Any] = {}
 
@@ -133,26 +134,63 @@ class RaceManagerWindow(QWidget):
         # Startup status polling (no freeze)
         self._startup_win: Optional[StatusWindow] = None
         self._startup_timer: Optional[QTimer] = None
+        self._init_done: bool = False
+        self._init_step_index: int = 0
 
         # Init
         log("RaceManagerWindow: init() start")
         self._setup_table()
         self._bind_signals()
         self._bind_ui()
-        self._init_db()
-        self._populate_session_box()
-        self._admin_setup()
-        self._build_racelists_cache()
-        
-        endurance = bool(self.race_man.endurance) if self.race_man else False
-        self._fill_racelists_combo(endurance)
-        self._old_endurance = endurance
-        
-        self._apply_debug_visibility()
-        self._setup_yellow_toggle_ui()
-        self._refresh_sc_time_label()
-        self._enable_idle_state()
-        log("RaceManagerWindow: init() done")
+        self.refs.load_btn.setEnabled(False)
+        self.refs.racelist_box.setEnabled(False)
+        self.setEnabled(False)
+        QTimer.singleShot(0, self._deferred_init)
+
+    def _deferred_init(self) -> None:
+        self._init_step_index = 0
+        self._run_next_init_step()
+
+    def _run_next_init_step(self) -> None:
+        steps = [
+            self._init_db,
+            self._populate_session_box,
+            self._admin_setup,
+            self._apply_current_session_column_layout,
+            self._apply_debug_visibility,
+            self._setup_yellow_toggle_ui,
+            self._refresh_sc_time_label,
+            self._enable_idle_state,
+        ]
+
+        if self._init_step_index >= len(steps):
+            self._init_done = True
+            self.setEnabled(True)
+            self.refs.racelist_box.setEnabled(True)
+            self.refs.load_btn.setEnabled(False)
+            QTimer.singleShot(0, self._load_racelists_deferred)
+            log("RaceManagerWindow: init() done")
+            return
+
+        step_fn = steps[self._init_step_index]
+        self._init_step_index += 1
+
+        try:
+            step_fn()
+        except Exception as ex:
+            log(f"[RaceWindow] init step failed ({step_fn.__name__}): {ex}")
+
+        QTimer.singleShot(0, self._run_next_init_step)
+
+    def _load_racelists_deferred(self) -> None:
+        try:
+            self._build_racelists_cache()
+            endurance = bool(self.race_man.endurance) if self.race_man else False
+            self._fill_racelists_combo(endurance)
+            self._old_endurance = endurance
+            self.refs.load_btn.setEnabled(self.refs.racelist_box.count() > 0)
+        except Exception as ex:
+            log(f"[RaceWindow] deferred racelists load failed: {ex}")
 
     def _refresh_sc_time_label(self) -> None:
         self.refs.sc_time_value.setText(self._format_mmss(int(getattr(self, "sc_elapsed_sec", 0) or 0)))
@@ -418,7 +456,8 @@ class RaceManagerWindow(QWidget):
 
         log(f"[RaceWindow] DeviceManager config: IP={ip} PORT={tcp_port} ConnType={conn_type} Flags={active_flags}")
 
-        self.device_man = DeviceManager(ip, tcp_port, conn_type, active_flags)
+        dbg = bool(getattr(self.settings, "debug", False))
+        self.device_man = DeviceManager(ip, tcp_port, conn_type, active_flags, debug_log=dbg)
         self.device_man.on_log = self._cb_log
         self.device_man.on_transponder_received_index = self._cb_transponder
         self.device_man.on_command_received = self._cb_command
@@ -574,6 +613,7 @@ class RaceManagerWindow(QWidget):
 
         self.race_man.session_race_list = self.session_race_list
         self.write_lap_timing(self.session_race_list)
+        self._apply_current_session_column_layout()
 
         self.sc_elapsed_sec = 0
         self.sc_compensation_sec = 0
@@ -823,6 +863,16 @@ class RaceManagerWindow(QWidget):
     # ------------------------------------------------------------
     # Session type change & Swap -- OK DO NOT TOUCH
     # ------------------------------------------------------------
+
+    def _apply_current_session_column_layout(self) -> None:
+        if not self.race_man:
+            return
+
+        self.swap_best_and_last_lap(
+            self.refs.lap_table,
+            race=bool(self.race_man.race),
+            endurance=bool(self.race_man.endurance),
+        )
 
     def swap_best_and_last_lap(self, table: QTableWidget, race: bool, endurance: bool) -> None:
         header = table.horizontalHeader()
@@ -1229,6 +1279,7 @@ class RaceManagerWindow(QWidget):
                 except Exception:
                     pass
                 self.write_lap_timing(self.session_race_list)
+                self._apply_current_session_column_layout()
                 list_reloaded = True
             except Exception as e:
                 log(f"[RaceWindow] RESET reload list failed: {e}")
