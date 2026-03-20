@@ -36,7 +36,7 @@ from Classes.live_timing_hub import LiveTimingManager
 
 from Classes.driver import Driver
 from Classes.race_list import RaceList
-from Classes.race_manager import RaceManager
+from Classes.race_manager import RaceManager, LapState
 from Classes.result_manager import ResultManager
 from Classes.analytics_manager import AnalyticsManager
 from Classes.session import SessionState, SESSION_NAMES
@@ -1954,10 +1954,12 @@ class RaceManagerWindow(QWidget):
             log(traceback.format_exc())
             return
 
-        # ✅ passed SOLO se non debounced/invalid
-        # (meglio usare LapState enum: qui lascio una forma compatibile)
-        
-        
+        if int(lap_state) == int(LapState.Invalid):
+            dt_ms = int((perf_counter() - t0) * 1000)
+            log(f"[RaceWindow] Duplicate/invalid pass ignored by UI refresh (swap={swap})")
+            log(f"[RaceWindow] HandleTransponderPass took {dt_ms} ms (swap={swap}, idx=-1, best_idx=-1)")
+            return
+
         # Dopo lap_done l'ordine può cambiare: ricalcola idx e best_idx sull'ordine ATTUALE
         idx = self._index_for_number(rl, number)
         best_idx = self._best_index(rl, rm)

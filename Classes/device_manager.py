@@ -245,6 +245,9 @@ class DeviceManager:
         self._log("ACCEPT", "Accept loop started")
 
         while self._is_running:
+            client_sock: Optional[socket.socket] = None
+            rfile = None
+            wfile = None
             try:
                 self._log("ACCEPT", "Waiting for client (accept)...")
                 client_sock, addr = self._server_sock.accept()
@@ -316,12 +319,39 @@ class DeviceManager:
                 if self._accept_timeout_s is not None:
                     continue
             except OSError as ex:
-                self._log("ACCEPT", f"OSError (likely stop): {ex}")
-                break
+                server_stopping = not self._is_running or self._server_sock is None
+                if server_stopping:
+                    self._log("ACCEPT", f"OSError while stopping: {ex}")
+                    break
+
+                self._log("ACCEPT", f"Client/socket OSError during accept or handshake: {ex}")
+                self._safe_close_handshake_client(client_sock, rfile, wfile)
+                continue
             except Exception as ex:
                 self._log("ACCEPT", f"Client accept/handshake error: {ex}")
+                self._safe_close_handshake_client(client_sock, rfile, wfile)
 
         self._log("ACCEPT", "Accept loop ended")
+
+    def _safe_close_handshake_client(
+        self,
+        client_sock: Optional[socket.socket],
+        rfile,
+        wfile,
+    ) -> None:
+        for stream in (rfile, wfile):
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+        if client_sock is not None:
+            try:
+                client_sock.close()
+            except Exception:
+                pass
 
     # -------------------------
     # Receive loop

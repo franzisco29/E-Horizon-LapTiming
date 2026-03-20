@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, TextIO
 
+from Modules.log_utils import log
+
 
 @dataclass
 class Device:
@@ -42,7 +44,8 @@ class Device:
             if s == "":
                 return None
             return s.rstrip("\r\n")
-        except Exception:
+        except Exception as ex:
+            log(f"[Device] {self.device_id}: read_line error: {type(ex).__name__}: {ex}")
             return None
 
     def close(self) -> None:
