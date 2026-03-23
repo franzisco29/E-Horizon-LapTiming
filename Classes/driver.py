@@ -275,6 +275,7 @@ class Driver:
             "lastLap": fmt_mm_ss_mmm(self.last_lap),
             "laps": int(self.laps),
             "status": status,
+            "statusID": self.race_status.value,
             "gap": gap,
             "interval": interval,
             "fastLap": fmt_mm_ss_mmm(self.fast_lap),
