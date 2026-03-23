@@ -24,6 +24,7 @@ class Device:
 
     last_status_response: datetime = field(default_factory=datetime.now)
     _write_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _closing: bool = field(default=False, init=False, repr=False)
 
     def send_line(self, line: str) -> None:
         """Invia una riga ASCII terminata da newline (WriteLine VB)."""
@@ -45,12 +46,19 @@ class Device:
                 return None
             return s.rstrip("\r\n")
         except Exception as ex:
+            if self._closing or isinstance(ex, (ConnectionResetError, OSError)):
+                return None
             log(f"[Device] {self.device_id}: read_line error: {type(ex).__name__}: {ex}")
             return None
 
     def close(self) -> None:
         """Chiude flussi e socket."""
+        self._closing = True
         try:
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
             try:
                 self._rfile.close()
             except Exception:

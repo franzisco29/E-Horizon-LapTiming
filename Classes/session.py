@@ -261,6 +261,7 @@ class Session:
         {
           sessionTime: "hh:mm:ss",
           sessionType: SessionType.ToString(),
+          sessionTypeId: SessionType,
           sessionStatus: SessionStatus.ToString(),
           pitOpen: OpenPit(),
           index: -1
@@ -269,6 +270,7 @@ class Session:
         return {
             "sessionTime": self.session_timer_hhmmss(),
             "sessionType": self.get_session_name(),
+            "sessionTypeId": int(self.session_type),
             "sessionStatus": self.get_state_name(),
             "pitOpen": self.get_pit_open_state(),
             "index": int(index),

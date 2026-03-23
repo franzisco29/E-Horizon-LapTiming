@@ -374,7 +374,7 @@ function render(drivers) {{
   elRows.innerHTML = drivers.map(d => `
     <tr class="row" data-key="${{d.number ?? d.driverId ?? d.raceNumber ?? ''}}">
       <td>${{d.position ?? ''}}</td>
-      <td>${{d.name ?? ''}}</td>
+      <td>${{d.name_surname ?? ''}}</td>
       <td>${{d.team ?? ''}}</td>
       <td>${{d.sector1 ?? ''}}</td>
       <td>${{d.sector2 ?? ''}}</td>
@@ -482,12 +482,14 @@ boot();
 
         # Use ngrok start --all to consolidate multiple tunnels in a single agent session.
         # This avoids hitting the 3 simultaneous sessions limit on free tier.
-        # Tunnels are defined in ngrok.yml (located in ~/.ngrok2/ngrok.yml)
+        # Tunnels are defined in Tools/ngrok/ngrok.yml inside the project directory.
         # (See: https://ngrok.com/docs/agent/config/)
+        ngrok_config = Path(__file__).resolve().parent.parent / "Tools" / "ngrok" / "ngrok.yml"
         cmd = [
             "ngrok",
             "start",
             "--all",
+            "--config", str(ngrok_config),
         ]
 
         env = os.environ.copy()
@@ -507,7 +509,7 @@ boot();
                 env=env,
                 creationflags=creationflags,
             )
-            log(f"[LiveTiming] ngrok agent started (configuration: ~/.ngrok2/ngrok.yml)")
+            log(f"[LiveTiming] ngrok agent started (configuration: {ngrok_config})")
             log(f"[LiveTiming] Public URL: https://{PUBLIC_TUNNEL_DOMAIN}")
 
             self._ngrok_log_thread = threading.Thread(

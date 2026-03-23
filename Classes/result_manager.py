@@ -255,29 +255,36 @@ class ResultManager:
         best_lap_drv = self._find_best_lap_driver()
 
         data: Dict[str, Any] = {}
-        data["sessionType"] = str(getattr(rm, "session_type", ""))
+        #data["sessionType"] = str(getattr(rm, "session_type", ""))
         data["date"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+        session_obj = getattr(rm, "session", None)
+        if session_obj is not None and hasattr(session_obj, "to_live_json"):
+            try:
+                data["session"] = json.loads(session_obj.to_live_json())
+            except Exception:
+                data["session"] = {}
 
         driver_list: List[Dict[str, Any]] = []
         for d in rm.session_race_list.drivers:
             driver_data: Dict[str, Any] = {}
-            driver_data["name"] = d.name
-            driver_data["surname"] = d.surname
-            driver_data["number"] = d.race_number
-            driver_data["transponderNumber"] = d.number
-            driver_data["team"] = d.team
-            driver_data["laps"] = d.laps
-            driver_data["history"] = [fmt_mm_ss_mmm(ts) for ts in d.lap_history]
-            driver_data["bestLap"] = fmt_mm_ss_mmm(d.fast_lap)
-            driver_data["position"] = d.position
-            driver_data["totalTime"] = fmt_mm_ss_mmm(self._driver_total_time(d), driver=d)
-            driver_data["interval"] = d.print_delta(True)
-            driver_data["leader"] = d.print_delta(False)
+            driver_data["name"] = d.name #BISOGNO
+            driver_data["surname"] = d.surname #BISOGNO
+            driver_data["number"] = d.race_number #BISOGNO
+            driver_data["transponderNumber"] = d.number #BISOGNO
+            driver_data["team"] = d.team   #BISOGNO
+            driver_data["laps"] = d.laps    #BISOGNO
+            driver_data["history"] = [fmt_mm_ss_mmm(ts) for ts in d.lap_history]        
+            driver_data["bestLap"] = fmt_mm_ss_mmm(d.fast_lap)  #BISOGNO
+            driver_data["position"] = d.position #BISOGNO
+            driver_data["totalTime"] = fmt_mm_ss_mmm(self._driver_total_time(d), driver=d)  #BISOGNO
+            driver_data["interval"] = d.print_delta(True)   #BISOGNO
+            driver_data["leader"] = d.print_delta(False)  #BISOGNO
             driver_data["entryPitTimes"] = [fmt_mm_ss_mmm(ts) for ts in d.pit_in_times]
             driver_data["pitTimes"] = [fmt_mm_ss_mmm(ts) for ts in d.pit_times]
 
             best = bool(rm.race and best_lap_drv and best_lap_drv.number == d.number)
-            driver_data["points"] = rm.get_points(d.position, best)
+            driver_data["points"] = rm.get_points(d.position, best) #BISOGNO
             driver_data["penaltySeconds"] = int((self._penalty_seconds_by_number or {}).get(int(d.number), 0))
 
             driver_list.append(driver_data)

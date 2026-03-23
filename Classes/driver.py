@@ -23,6 +23,8 @@ class Driver:
     race_status: RaceState = RaceState.NOT_STARTED
     laps: int = 0
     position: int = 0
+    
+    isFastestDriver: bool = False # flag per evidenziare il miglior tempo in classifica (VB: BestLapDrv)
 
     delta: timedelta = field(default_factory=lambda: timedelta(0))
     leader_delta: timedelta = field(default_factory=lambda: timedelta(0))
@@ -258,12 +260,14 @@ class Driver:
         return {
             # stable identifiers
             "driverId": int(self.driver_id),
-            "number": int(self.number),
-            "raceNumber": int(self.race_number),
+            "transponderNumber": int(self.number),
+            "number": int(self.race_number),
 
             # table fields
             "position": int(self.position),
-            "name": name,
+            "name_surname": name,
+            "name": self.name,
+            "surname": self.surname,
             "team": self.team,
             "sector1": self._sector_to_string(0),
             "sector2": self._sector_to_string(1),
@@ -275,6 +279,8 @@ class Driver:
             "interval": interval,
             "fastLap": fmt_mm_ss_mmm(self.fast_lap),
             "timeOnTrack": fmt_mm_ss_mmm(self.time_on_track),
+            "isBestLap": self.isFastestDriver,
+            
         }
 
     def to_live(self) -> str:

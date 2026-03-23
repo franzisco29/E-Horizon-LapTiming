@@ -357,6 +357,7 @@ class RaceManager:
             if device == int(DevicesIDs.Central):
                 driver.get_lap(self.session.sectors_on, self.race)
                 self.best_lap_driver = self._best_lap_find(self.session_race_list.drivers)
+                self.best_lap_update();
                 self._calculate_delta()
 
             elif device == int(DevicesIDs.S1):
@@ -396,6 +397,16 @@ class RaceManager:
     # Ordering + delta
     # ============================================================
 
+    def best_lap_update(self) -> None:
+        """
+        Aggiorna il flag isFastestDriver su tutti i driver, per evidenziare il miglior tempo in classifica.
+        """
+        if not self.session_race_list or not self.session_race_list.drivers:
+            return      
+        for d in self.session_race_list.drivers:
+            d.isFastestDriver = (d.number == self.best_lap_driver)     
+             
+
     def _calculate_delta(self) -> None:
         if not self.session_race_list or not self.session_race_list.drivers:
             return
@@ -410,15 +421,27 @@ class RaceManager:
             prev = drivers[i - 1]
 
             if self.race:
-                cur.delta = cur.sort_time - prev.sort_time
-                cur.leader_delta = cur.sort_time - leader.sort_time
+                new_delta = cur.sort_time - prev.sort_time
+                new_leader_delta = cur.sort_time - leader.sort_time
+
+                # freeze: aggiorna solo se il valore calcolato è positivo (evita artefatti
+                # da calcolo prematuro quando la macchina davanti ha appena passato la linea)
+                if new_delta.total_seconds() >= 0:
+                    cur.delta = new_delta
+                if new_leader_delta.total_seconds() >= 0:
+                    cur.leader_delta = new_leader_delta
 
                 # laps behind (previous and leader)
                 cur.laps_behind[1] = max(0, prev.laps - cur.laps)
                 cur.laps_behind[0] = max(0, leader.laps - cur.laps)
             else:
-                cur.delta = cur.fast_lap - prev.fast_lap
-                cur.leader_delta = cur.fast_lap - leader.fast_lap
+                new_delta = cur.fast_lap - prev.fast_lap
+                new_leader_delta = cur.fast_lap - leader.fast_lap
+
+                if new_delta.total_seconds() >= 0:
+                    cur.delta = new_delta
+                if new_leader_delta.total_seconds() >= 0:
+                    cur.leader_delta = new_leader_delta
 
     def _order_race_list(self, race: bool) -> None:
         if not self.session_race_list:

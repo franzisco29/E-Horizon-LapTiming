@@ -131,9 +131,16 @@ class RaceManagerWindow(QWidget):
         self._lights_timer.setInterval(1000)
         self._lights_timer.timeout.connect(self._on_lights_tick)
 
+        # Green flag color timer (3s duration)
+        self._green_flag_timer = QTimer(self)
+        self._green_flag_timer.setInterval(3000)
+        self._green_flag_timer.setSingleShot(True)
+        self._green_flag_timer.timeout.connect(self._on_green_flag_timeout)
+
         # Startup status polling (no freeze)
         self._startup_win: Optional[StatusWindow] = None
         self._startup_timer: Optional[QTimer] = None
+        self._racepanel_status_timer: Optional[QTimer] = None
         self._init_done: bool = False
         self._init_step_index: int = 0
 
@@ -194,6 +201,20 @@ class RaceManagerWindow(QWidget):
 
     def _refresh_sc_time_label(self) -> None:
         self.refs.sc_time_value.setText(self._format_mmss(int(getattr(self, "sc_elapsed_sec", 0) or 0)))
+
+    def _update_racepanel_status_ui(self) -> None:
+        connected = False
+
+        if self.device_man is not None:
+            try:
+                racepanel_id = f"D{int(DeviceManager.DevicesIDs.RacePanel)}"
+                with self.device_man._lock:
+                    connected = racepanel_id in self.device_man._devices
+            except Exception:
+                connected = False
+
+        status = "ONLINE" if connected else "OFFLINE"
+        self.refs.flag_group.setTitle(f"Flag Control  [RacePanel: {status}]")
 
     # ------------------------------------------------------------
     # UI/table setup -- OK DO NOT TOUCH
@@ -332,6 +353,77 @@ class RaceManagerWindow(QWidget):
         self.refs.vsc_btn.setChecked(bool(self.vsc_active))
         self.refs.vsc_btn.blockSignals(False)
 
+        # Update red button state
+        self.refs.red_btn.blockSignals(True)
+        self.refs.red_btn.setChecked(bool(self.red_flag_out))
+        self.refs.red_btn.blockSignals(False)
+
+        # Update button colors based on state
+        self._update_flag_button_colors()
+
+    def _update_flag_button_colors(self) -> None:
+        """Update colors of flag buttons based on their active state"""
+        # Yellow buttons - yellow color when active
+        for idx, btn in enumerate((self.refs.ys1_btn, self.refs.ys2_btn, self.refs.ys3_btn)):
+            if self.yellows[idx]:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background: #FFD700;
+                        color: #000000;
+                        border: 2px solid #DAA520;
+                        border-radius: 4px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background: #FFF44F;
+                    }
+                    QPushButton:pressed {
+                        background: #FFC700;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("")
+
+        # Red button - red color when active
+        if self.red_flag_out:
+            self.refs.red_btn.setStyleSheet("""
+                QPushButton {
+                    background: #FF3333;
+                    color: #FFFFFF;
+                    border: 2px solid #CC0000;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background: #FF5555;
+                }
+                QPushButton:pressed {
+                    background: #DD0000;
+                }
+            """)
+        else:
+            self.refs.red_btn.setStyleSheet("")
+
+        # Green button - green color when active (checked)
+        if self.refs.green_btn.isChecked():
+            self.refs.green_btn.setStyleSheet("""
+                QPushButton {
+                    background: #00CC00;
+                    color: #000000;
+                    border: 2px solid #00AA00;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background: #00EE00;
+                }
+                QPushButton:pressed {
+                    background: #00AA00;
+                }
+            """)
+        else:
+            self.refs.green_btn.setStyleSheet("")
+
     # ------------------------------------------------------------
     # DB -- OK DO NOT TOUCH
     # ------------------------------------------------------------
@@ -462,6 +554,13 @@ class RaceManagerWindow(QWidget):
         self.device_man.on_transponder_received_index = self._cb_transponder
         self.device_man.on_command_received = self._cb_command
         type(self.device_man).add_transponder_simulated_index_listener(self._cb_transponder)
+        self._update_racepanel_status_ui()
+
+        if self._racepanel_status_timer is None:
+            self._racepanel_status_timer = QTimer(self)
+            self._racepanel_status_timer.setInterval(500)
+            self._racepanel_status_timer.timeout.connect(self._update_racepanel_status_ui)
+            self._racepanel_status_timer.start()
 
         # UI session info
         self.refs.ip_label.setText(ip if conn_type != ConnectionTypes.NONE else "NONE")
@@ -490,6 +589,7 @@ class RaceManagerWindow(QWidget):
             return
 
         self._startup_win.update_status(self.device_man.get_device_status_list())
+        self._update_racepanel_status_ui()
 
         if self.device_man.all_required_devices_connected():
             log("Startup: all devices connected")
@@ -564,13 +664,33 @@ class RaceManagerWindow(QWidget):
             except Exception:
                 current_state = SessionState.NotStarted
 
-            if current_state != SessionState.NotStarted:
-                log(f"[RaceWindow] [DeviceCmd] SP ignored: session_status={current_state}")
+            # SP behavior:
+            # - race sessions: valid only in Starting (start procedure)
+            # - non-race sessions: valid in NotStarted (direct session start)
+            try:
+                is_race_session = bool(getattr(self.race_man, "race"))
+            except Exception:
+                is_race_session = True
+
+            expected_state = SessionState.Starting if is_race_session else SessionState.NotStarted
+            log(
+                f"[RaceWindow] [DeviceCmd] SP check: race={is_race_session} "
+                f"session_status={current_state} expected={expected_state}"
+            )
+            if current_state != expected_state:
+                log(
+                    f"[RaceWindow] [DeviceCmd] SP ignored: session_status={current_state} "
+                    f"expected={expected_state} race={is_race_session}"
+                )
                 return
 
-            # START_PROC_CMD dal device = click virtuale su Start per avviare la fase luci.
+            # START_PROC_CMD dal device = click virtuale su Start.
+            # In gara avvia la procedura di start; fuori gara avvia direttamente la sessione.
             self._on_start_clicked()
-            log("[RaceWindow] [DeviceCmd] SP -> virtual Start click")
+            if is_race_session:
+                log("[RaceWindow] [DeviceCmd] SP -> start procedure click")
+            else:
+                log("[RaceWindow] [DeviceCmd] SP -> start session click (non-race)")
             return
 
         if command == DeviceCommand.LIGHTS_OUT_CMD.value:
@@ -582,13 +702,13 @@ class RaceManagerWindow(QWidget):
             except Exception:
                 current_state = SessionState.NotStarted
 
-            if current_state != SessionState.Starting:
+            if current_state != SessionState.NotStarted:
                 log(f"[RaceWindow] [DeviceCmd] LO ignored: session_status={current_state}")
                 return
 
-            # LIGHTS_OUT_CMD dal device = click virtuale su Lights Out/Start.
+            # LIGHTS_OUT_CMD dal device = click virtuale su Lights Out/Start sessione.
             self._on_start_clicked()
-            log("[RaceWindow] [DeviceCmd] LO -> virtual Lights Out click")
+            log("[RaceWindow] [DeviceCmd] LO -> lights out click")
             return
 
         log(f"[RaceWindow] [DeviceCmd] unsupported command ignored: {command}")
@@ -1697,6 +1817,7 @@ class RaceManagerWindow(QWidget):
         if self.yellows[i]:
             self.sc_active = False
             self.vsc_active = False
+            self.red_flag_out = False
         self.yellow_management()
 
     def yellow_management(self) -> None:
@@ -1727,18 +1848,89 @@ class RaceManagerWindow(QWidget):
         log(f"[RaceWindow] YellowManagement -> {cmd}")
 
     def _on_green_clicked(self) -> None:
-        if self.device_man:
-            self.device_man.broadcast(DeviceCommand.GREEN_FLAG_CMD.value)
-            log("FLAG Green")
-            self.yellows = [False, False, False]
-            self.sc_active = False
-            self.vsc_active = False
-            self._refresh_flag_buttons_ui()
+        """
+        Green flag toggle (momentary):
+        - Send GREEN_FLAG cmd
+        - If session is STOPPED: trigger start button (to resume session)
+        - Keep button highlighted for 3 seconds
+        """
+        if not self.device_man:
+            return
+
+        self.device_man.broadcast(DeviceCommand.GREEN_FLAG_CMD.value)
+        log("FLAG Green")
+        
+        # Check if session is STOPPED and restart it
+        current_state = SessionState.NotStarted
+        if self.race_man:
+            try:
+                current_state = SessionState(int(getattr(self.race_man, "session_status", SessionState.NotStarted)))
+            except Exception:
+                pass
+        
+        if current_state == SessionState.Stopped:
+            log("[RaceWindow] Green flag during stopped session: triggering resume")
+            self._on_start_clicked()  # Trigger resume
+        
+        # Clear other flags
+        self.yellows = [False, False, False]
+        self.sc_active = False
+        self.vsc_active = False
+        self.red_flag_out = False
+        
+        # Set green button active and start 3-second timer
+        self.refs.green_btn.blockSignals(True)
+        self.refs.green_btn.setChecked(True)
+        self.refs.green_btn.blockSignals(False)
+        
+        # Start timer to deactivate after 3s (in parallel)
+        self._green_flag_timer.start()
+        
+        self._refresh_flag_buttons_ui()
+
+    def _on_green_flag_timeout(self) -> None:
+        """Called when green flag 3-second timeout expires - deactivate the button"""
+        self.refs.green_btn.blockSignals(True)
+        self.refs.green_btn.setChecked(False)
+        self.refs.green_btn.blockSignals(False)
+        self._refresh_flag_buttons_ui()
 
     def _on_red_clicked(self) -> None:
-        if self.device_man:
+        """
+        Red flag toggle:
+        - If NOT active: toggle ON, send RED_FLAG cmd
+          - If session is STARTED: also trigger start button (to stop session)
+        - If ACTIVE: toggle OFF, send CLEAR_FLAG cmd
+        """
+        if not self.device_man:
+            return
+
+        # Toggle state
+        was_active = self.red_flag_out
+        self.red_flag_out = not self.red_flag_out
+
+        if self.red_flag_out:
+            # Activate RED flag
             self.device_man.broadcast(DeviceCommand.RED_FLAG_CMD.value)
-            log("FLAG Red")
+            log("FLAG Red -> ACTIVE")
+            
+            # Check if session is STARTED (running) and need to stop it
+            current_state = SessionState.NotStarted
+            if self.race_man:
+                try:
+                    current_state = SessionState(int(getattr(self.race_man, "session_status", SessionState.NotStarted)))
+                except Exception:
+                    pass
+            
+            if current_state == SessionState.Started:
+                log("[RaceWindow] Red flag during running session: triggering stop")
+                self._on_start_clicked()  # Trigger stop
+        else:
+            # Deactivate RED flag - send clear
+            self.device_man.broadcast(DeviceCommand.CLC_CMD.value)
+            log("FLAG Red -> INACTIVE (cleared)")
+        
+        self._refresh_flag_buttons_ui()
 
     def _on_clear_clicked(self) -> None:
         if self.device_man:
@@ -1747,6 +1939,7 @@ class RaceManagerWindow(QWidget):
         self.yellows = [False, False, False]
         self.sc_active = False
         self.vsc_active = False
+        self.red_flag_out = False
         self._refresh_flag_buttons_ui()
 
     def _on_sc_clicked(self) -> None:
@@ -1754,6 +1947,7 @@ class RaceManagerWindow(QWidget):
         if self.sc_active:
             self.vsc_active = False
             self.yellows = [False, False, False]
+            self.red_flag_out = False
             cmd = DeviceCommand.SAFETY_CAR_CMD.value
         else:
             cmd = DeviceCommand.GREEN_FLAG_CMD.value
@@ -1769,6 +1963,7 @@ class RaceManagerWindow(QWidget):
         if self.vsc_active:
             self.sc_active = False
             self.yellows = [False, False, False]
+            self.red_flag_out = False
             cmd = DeviceCommand.FULL_YELLOW_CMD.value
         else:
             cmd = DeviceCommand.GREEN_FLAG_CMD.value

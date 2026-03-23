@@ -40,6 +40,7 @@ class RaceManagerWindowRefs:
     formation_btn: QPushButton
     op_pit_btn: QPushButton
     cl_pit_btn: QPushButton
+    flag_group: QGroupBox
     lap_table: QTableWidget
 
 def _btn(text: str, min_w: int = 0) -> QPushButton:
@@ -47,6 +48,15 @@ def _btn(text: str, min_w: int = 0) -> QPushButton:
     if min_w:
         b.setMinimumWidth(min_w)
     b.setCursor(Qt.PointingHandCursor)
+    return b
+
+def _checkable_btn(text: str, min_w: int = 0) -> QPushButton:
+    """Create a checkable button for flag toggle states"""
+    b = QPushButton(text)
+    if min_w:
+        b.setMinimumWidth(min_w)
+    b.setCursor(Qt.PointingHandCursor)
+    b.setCheckable(True)
     return b
 
 def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRefs]:
@@ -221,9 +231,15 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         "Green": (2, 0), "Red": (2, 1), "Clear": (2, 2),
         "Wet R": (3, 0), "OP Pit": (3, 1), "CL Pit": (3, 2),
     }
+    # Buttons that should be checkable (toggle state)
+    checkable_flags = {"YS1", "YS2", "YS3", "Red", "Green"}
+    
     btns = {}
     for text, pos in flags.items():
-        btn = _btn(text, 54)
+        if text in checkable_flags:
+            btn = _checkable_btn(text, 54)
+        else:
+            btn = _btn(text, 54)
         btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         gl_flag.addWidget(btn, pos[0], pos[1])
         btns[text] = btn
@@ -292,6 +308,7 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         formation_btn         = btns["F Lap"],
         op_pit_btn            = btns["OP Pit"],
         cl_pit_btn            = btns["CL Pit"],
+        flag_group            = gb_flag,
 
         lap_table             = table,
     )
