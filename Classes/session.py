@@ -32,7 +32,7 @@ class PitOpenState(IntEnum):
     Open  = 1
     Valid = 2
 
-SESSION_NAMES = ["Free Practice", "Q - Groups", "Q - Hyperpole","R - Feature", "R - Sprint","R - Endurance"]
+SESSION_NAMES = ["Free Practice", "Q - Group", "Q - Hyperpole", "R - Feature", "R - Sprint", "R - Endurance"]
 
 @dataclass
 class Session:
@@ -182,7 +182,7 @@ class Session:
     def get_session_name(self) -> str:
         st = int(self.session_type)
         if st == int(SessionTypes.Practice):
-            return "Practice"
+            return "Free Practice"
         if st == int(SessionTypes.Qualifying):
             return "Q - Group"
         if st == int(SessionTypes.Hyperpole):
@@ -190,10 +190,13 @@ class Session:
         if st == int(SessionTypes.FRace):
             return "R - Feature"
         if st == int(SessionTypes.SRace):
-            return "R - Sprint Race"
+            return "R - Sprint"
         if st == int(SessionTypes.ERace):
             return "R - Endurance"
         return "Error"
+
+
+    
 
     def get_state_name(self) -> str:
         st = int(self.session_status)

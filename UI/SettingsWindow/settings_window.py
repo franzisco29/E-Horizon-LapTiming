@@ -135,9 +135,14 @@ class SettingsWindow(QDialog):
 
         is_tcp = r.conn_type_combo.currentIndex() == 1 and admin != 0
 
-        r.tcp_box.setEnabled(is_tcp)
-        r.tcp_box.setToolTip(
-            "" if is_tcp else "Abilita 'Comunicazione: TCP' per modificare questi parametri."
+        # I dispositivi devono restare selezionabili anche quando la connessione e NONE/SERIAL/WIFIUDP.
+        can_edit_devices = admin != 0
+        for cb in r.dev_checks:
+            cb.setEnabled(can_edit_devices)
+
+        r.tcp_port_edit.setEnabled(is_tcp)
+        r.tcp_port_edit.setToolTip(
+            "" if is_tcp else "Abilita 'Comunicazione: TCP' per modificare la porta TCP."
         )
 
     def _refresh_summary(self) -> None:

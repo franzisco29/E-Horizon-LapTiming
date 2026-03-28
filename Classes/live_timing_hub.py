@@ -554,6 +554,11 @@ boot();
                 line = raw.strip()
                 if line:
                     log(f"[LiveTiming][ngrok] {line}")
+                    if "ERR_NGROK_334" in line:
+                        log(
+                            "[LiveTiming][ngrok] Reserved domain already online on another ngrok endpoint. "
+                            "Stop the active endpoint from ngrok dashboard (or other machine) and restart LiveTiming."
+                        )
         except Exception:
             pass
 

@@ -1107,6 +1107,7 @@ class RaceManagerWindow(QWidget):
         def _disable_combos(disabled: bool) -> None:
             self.refs.session_box.setEnabled(not disabled)
             self.refs.racelist_box.setEnabled(not disabled)
+            self.refs.load_btn.setEnabled((not disabled) and self.refs.racelist_box.count() > 0)
 
         def _refresh_table() -> None:
             if self.session_race_list:
@@ -1117,6 +1118,7 @@ class RaceManagerWindow(QWidget):
         # ------------------------------------------------------------
         if act_state == SessionState.NotStarted:
             _disable_combos(True)
+            self.refs.load_btn.setEnabled(False)
 
             # VB: raceMan.StartSession()
             self.race_man.start_session()
@@ -1221,6 +1223,8 @@ class RaceManagerWindow(QWidget):
         # ------------------------------------------------------------
         elif act_state == SessionState.Finished:
             _disable_combos(False)
+            # Ensure load button is enabled after session ends
+            self.refs.load_btn.setEnabled(self.refs.racelist_box.count() > 0)
 
             # VB: raceMan.ResetSession()
             self.race_man.reset_session()
@@ -1228,8 +1232,8 @@ class RaceManagerWindow(QWidget):
             # VB: PitStateLB.Text = "Pit Closed"
             self.refs.pit_label.setText("Pit Closed")
 
-            # VB: StartBT.Text = "Start"
-            self.refs.start_btn.setText("Start")
+            # VB: StartBT.Text = "Avanti"
+            self.refs.start_btn.setText("Avanti")
 
             # VB: LapTimingView.Rows.Clear() + writeLapTiming
             # (noi riscriviamo tabella da lista: è equivalente)
@@ -1343,6 +1347,8 @@ class RaceManagerWindow(QWidget):
         # sync live (uguale al tuo)
         if self.live_man and self.live_man.enabled:
             self.live_man.send_session_info(self.race_man)
+            if self.session_race_list:
+                self.live_man.send_race_data(self.session_race_list.drivers)
     
     # ------------------------------------------------------------
     # RESET TO IMPLEMENT BETTER
@@ -1420,6 +1426,7 @@ class RaceManagerWindow(QWidget):
         self.refs.analytics_btn.setEnabled(list_reloaded)
         self.refs.pre_race_btn.setEnabled(list_reloaded)
         self.refs.apply_status_btn.setEnabled(list_reloaded)
+        self.refs.load_btn.setEnabled(list_reloaded and self.refs.racelist_box.count() > 0)
 
         # Keep semaphores/devices aligned with reset state.
         if self.device_man:
@@ -1500,14 +1507,15 @@ class RaceManagerWindow(QWidget):
                 all_ended = True  # fallback: se non hai ancora all_ended, chiudiamo lo stesso
 
             if all_ended:
+                log("[RaceWindow] all_ended()=True (timer tick): aggiorno UI a 'Avanti'")
                 try:
                     self._ses_timer.stop()
                 except Exception:
                     pass
 
-                # VB UI reset
+                # UI reset: label sempre "Avanti"
                 try:
-                    self.refs.start_btn.setText("Reset")
+                    self.refs.start_btn.setText("Avanti")
                     self.refs.session_box.setEnabled(True)
                     self.refs.racelist_box.setEnabled(True)
                     self.refs.pit_label.setText("Pit Closed")
@@ -1802,12 +1810,30 @@ class RaceManagerWindow(QWidget):
             7: RaceState.DNS,
         }
         st = mapping.get(idx, RaceState.RACING)
+        log(f"[RaceWindow] Cambio stato pilota row={row} -> {st}")
         try:
             self.race_man.set_status(row, st)
         except Exception:
             pass
         self.write_lap_timing(self.session_race_list)
         log(f"[RaceWindow] Apply status: row={row} -> {st}")
+
+        ended = self.race_man.all_ended()
+        log(f"[RaceWindow] all_ended()={ended} dopo cambio stato pilota (row={row})")
+        # Se tutti i piloti sono ended (inclusi DNS/DNF/DSQ), aggiorna UI come a fine gara
+        if ended:
+            log("[RaceWindow] all_ended()=True (cambio stato): aggiorno UI a 'Avanti'")
+            try:
+                self._ses_timer.stop()
+            except Exception:
+                pass
+            try:
+                self.refs.start_btn.setText("Avanti")
+                self.refs.session_box.setEnabled(True)
+                self.refs.racelist_box.setEnabled(True)
+                self.refs.pit_label.setText("Pit Closed")
+            except Exception:
+                pass
 
     # ------------------------------------------------------------
     # Flags control (base)

@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import IntEnum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from Classes.session import Session, SessionTypes, SessionState, PitOpenState
 from Classes.race_list import RaceList
 from Classes.driver import Driver
 
 from Modules.enums import RaceState
+from Modules.log_utils import log
 
 
 # Se hai già DevicesIDs altrove, importalo e rimuovi questo.
@@ -48,9 +49,11 @@ class RaceManager:
     session: Session = field(init=False)
     best_lap_driver: int = 0  # transponder ID (Driver.number)
 
-    # Debounce tracking per transponder ID (Driver.number)
-    last_device_detected: Dict[int, int] = field(default_factory=dict)     # number -> device id
-    last_time_detected: Dict[int, datetime] = field(default_factory=dict)  # number -> last timestamp
+    # Debounce tracking:
+    # - ultimo device visto per ogni transponder
+    # - ultimo timestamp visto per coppia (transponder, device)
+    last_device_detected: Dict[int, int] = field(default_factory=dict)            # number -> device id
+    last_time_detected: Dict[Tuple[int, int], datetime] = field(default_factory=dict)  # (number, device) -> last timestamp
 
     # lookup veloce number -> Driver
     driver_by_number: Dict[int, Driver] = field(default_factory=dict)
@@ -182,7 +185,7 @@ class RaceManager:
         for d in self.session_race_list.drivers:
             d.set_start_time()
             self.last_device_detected[d.number] = int(DevicesIDs.Central)
-            self.last_time_detected[d.number] = now
+            self.last_time_detected[(d.number, int(DevicesIDs.Central))] = now
 
         self._set_all_start_status()
 
@@ -221,7 +224,11 @@ class RaceManager:
         self.leader_finish_lap = None
 
     def reset_session(self) -> None:
-        self.session_status = int(SessionState.NotStarted)
+        self.session_status = (
+            int(SessionState.Starting)
+            if self.race
+            else int(SessionState.NotStarted)
+        )
         self.time_over = False
         self.leader_finished = False
         self.leader_finish_lap = None
@@ -252,7 +259,13 @@ class RaceManager:
             return
         d = self.session_race_list.drivers[in_driver_index]
         self.last_device_detected[d.number] = int(device)
-        self.last_time_detected[d.number] = datetime.now()
+        self.last_time_detected[(d.number, int(device))] = datetime.now()
+
+    def _debounce_key(self, transponder_number: int, device: int) -> Tuple[int, int]:
+        return (int(transponder_number), int(device))
+
+    def _mark_detected(self, transponder_number: int, device: int) -> None:
+        self.last_time_detected[self._debounce_key(transponder_number, device)] = datetime.now()
 
     # ============================================================
     # Helpers (safe lookup / resolve index)
@@ -477,7 +490,10 @@ class RaceManager:
             return
 
         status = RaceState.RACING if self.race else RaceState.IN_PIT
+        preserved = {RaceState.DNF, RaceState.DSQ, RaceState.DNS}
         for d in self.session_race_list.drivers:
+            if d.race_status in preserved:
+                continue
             d.race_status = status
 
     def set_status(self, driver_index: int, status: RaceState) -> None:
@@ -489,13 +505,22 @@ class RaceManager:
         if not self.session_race_list:
             return True
 
+        # LOG: stato di tutti i piloti
+        stati = []
+        for d in self.session_race_list.drivers:
+            stati.append(f"{getattr(d, 'name', '')}({getattr(d, 'race_status', '')})")
+        log(f"[RaceManager][all_ended] Stato piloti: {', '.join(stati)}")
+
         for d in self.session_race_list.drivers:
             if d.race_status != RaceState.FINISHED:
                 # VB: se < DNF e != Finished => false
                 if int(d.race_status) < int(RaceState.DNF):
+                    log(f"[RaceManager][all_ended] Pilota NON ended: {getattr(d, 'name', '')} stato={d.race_status}")
                     return False
                 if d.race_status != RaceState.FINISHED:
-                    return False
+                    log(f"[RaceManager][all_ended] Pilota stato non FINISHED ma >=DNF: {getattr(d, 'name', '')} stato={d.race_status}")
+                    continue
+        log("[RaceManager][all_ended] Tutti i piloti ended")
         return True
 
     # ============================================================
@@ -513,10 +538,10 @@ class RaceManager:
     # Debounce + state machine (VB setLapStatus)
     # ============================================================
 
-    def _is_debounced(self, transponder_number: int, swap: bool) -> bool:
+    def _is_debounced(self, transponder_number: int, device: int, swap: bool) -> bool:
         if swap:
             return False
-        last = self.last_time_detected.get(transponder_number)
+        last = self.last_time_detected.get(self._debounce_key(transponder_number, device))
         if last is None:
             return False
         return (datetime.now() - last) < timedelta(milliseconds=int(self.debounce_ms))
@@ -531,7 +556,7 @@ class RaceManager:
     ) -> LapState:
         """
         Replica della logica VB setLapStatus:
-        - debounce sul transponder (Driver.number)
+        - debounce sulla coppia (Driver.number, device)
         - accetta se cambia device o device==Central o swap
         - ritorna LapState.Valid / OutLap / Invalid
         """
@@ -544,7 +569,7 @@ class RaceManager:
         driver_index = self._resolve_driver_index(driver_index, number)
         driver = self.session_race_list.drivers[driver_index]
 
-        if self._is_debounced(driver.number, swap):
+        if self._is_debounced(driver.number, device, swap):
             return LapState.Invalid
 
         last_dev = self.last_device_detected.get(driver.number)
@@ -571,7 +596,7 @@ class RaceManager:
                     else:
                         driver.race_status = RaceState.FINISHED
 
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.Valid
 
             if actual_status == RaceState.FINISHED:
@@ -580,12 +605,12 @@ class RaceManager:
 
             if actual_status == RaceState.IN_PIT:
                 driver.race_status = RaceState.RACING
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.Valid if self.race else LapState.OutLap
 
             if actual_status == RaceState.OUTLAP:
                 driver.race_status = RaceState.RACING
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
 
                 if self.session_status == int(SessionState.Finished):
                     if self.race:
@@ -607,7 +632,7 @@ class RaceManager:
 
             if actual_status == RaceState.RACING:
                 driver.race_status = RaceState.RACING
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.Valid
 
             if actual_status == RaceState.FINISHED:
@@ -616,11 +641,11 @@ class RaceManager:
 
             if actual_status == RaceState.IN_PIT:
                 driver.race_status = RaceState.RACING
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.Valid if self.race else LapState.OutLap
 
             if actual_status == RaceState.OUTLAP:
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 if self.race:
                     driver.race_status = RaceState.RACING
                     return LapState.Valid
@@ -636,7 +661,7 @@ class RaceManager:
 
             if actual_status == RaceState.RACING:
                 driver.race_status = RaceState.IN_PIT
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.InPit
 
             if actual_status == RaceState.FINISHED:
@@ -645,12 +670,12 @@ class RaceManager:
 
             if actual_status == RaceState.IN_PIT:
                 driver.race_status = RaceState.IN_PIT
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.Invalid
 
             if actual_status == RaceState.OUTLAP:
                 driver.race_status = RaceState.IN_PIT
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.InPit
 
             return LapState.Invalid
@@ -663,7 +688,7 @@ class RaceManager:
 
             if actual_status == RaceState.RACING:
                 driver.race_status = RaceState.OUTLAP
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.OutLap
 
             if actual_status == RaceState.FINISHED:
@@ -672,12 +697,12 @@ class RaceManager:
 
             if actual_status == RaceState.IN_PIT:
                 driver.race_status = RaceState.OUTLAP
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.OutLap 
 
             if actual_status == RaceState.OUTLAP:
                 driver.race_status = RaceState.OUTLAP
-                self.last_time_detected[driver.number] = datetime.now()
+                self._mark_detected(driver.number, device)
                 return LapState.Invalid
 
             return LapState.Invalid

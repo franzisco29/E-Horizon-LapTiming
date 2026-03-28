@@ -140,7 +140,7 @@ class Driver:
 
     def in_pit(self, race: bool) -> None:
         new_time = datetime.now()
-        self.sort_time = new_time
+        self.race_time = new_time
 
         if race:
             self.pit_enter_time = new_time
@@ -148,7 +148,6 @@ class Driver:
 
     def out_lap(self, sect: bool, race: bool) -> None:
         new_time = datetime.now()
-        self.sort_time = new_time
         self.race_time = new_time
         if race:
             if self.pit_enter_time is None:
@@ -200,7 +199,7 @@ class Driver:
             RaceState.NOT_STARTED: "Not Started",
             RaceState.RACING: "Racing",
             RaceState.FINISHED: "Finished",
-            RaceState.IN_PIT: "In Pit",
+            RaceState.IN_PIT: "PIT",
             RaceState.OUTLAP: "OutLap",
             RaceState.DNF: "DNF",
             RaceState.DSQ: "DSQ",
