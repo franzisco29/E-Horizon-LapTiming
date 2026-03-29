@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>E-Horizon LiveTiming</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="stylesheet" href="/web_templates/liverace.css">
+</head>
+</head>
+<body>
+
+  <main class="main">
+    <div class="header">
+      <div style="display:flex; align-items:center; gap:18px;">
+        <img id="mainLogo" src="/assets/logo" alt="Logo" style="height:54px; max-width:120px; background:transparent; border-radius:8px; object-fit:contain;" onerror="this.style.display='none'">
+        <div>
+          <h1 style="margin:0">E-Horizon Live Timing</h1>
+          <div id="sessionMeta" class="meta">In attesa dati sessione...</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div id="timer" class="timer">--:--:--</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Pos</th>
+            <th>Pilota</th>
+            <th>Team</th>
+            <th>S1</th>
+            <th>S2</th>
+            <th>S3</th>
+            <th id="colBestLastA">Best</th>
+            <th>Laps</th>
+            <th>Status</th>
+            <th>Gap</th>
+            <th>Int</th>
+            <th id="colBestLastB">Last</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div id="sponsor-bar">
+      <div class="sponsor-track"></div>
+    </div>
+  </main>
+
+  <script src="/web_templates/liverace.js"></script>
+</body>
+</html>

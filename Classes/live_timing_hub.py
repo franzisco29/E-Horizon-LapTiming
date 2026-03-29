@@ -123,6 +123,12 @@ class LiveTimingManager:
             allow_headers=["*"],
         )
 
+        # Serve i file statici (css/js) dalla cartella web_templates
+        import os
+        from fastapi.staticfiles import StaticFiles
+        static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Resources", "web_templates")
+        app.mount("/web_templates", StaticFiles(directory=static_dir), name="web_templates")
+
         @app.get("/api/snapshot")
         async def snapshot() -> Dict[str, Any]:
             return {
@@ -149,6 +155,41 @@ class LiveTimingManager:
                 return FileResponse(str(p), media_type="image/x-icon")
             return JSONResponse(status_code=404, content={})
 
+        @app.get("/assets/sponsors", response_model=None)
+        async def sponsors() -> Any:
+            sponsors_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Resources", "Sponsors")
+            try:
+                files = [f for f in os.listdir(sponsors_dir) if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".svg"))]
+            except Exception:
+                files = []
+            urls = [f"/assets/sponsorfile/{fname}" for fname in files]
+            from fastapi import Response
+            return Response(
+                content=json.dumps(urls),
+                media_type="application/json",
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+            )
+
+        @app.get("/assets/sponsorfile/{filename}", response_model=None)
+        async def sponsorfile(filename: str) -> Any:
+            sponsors_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Resources", "Sponsors")
+            path = os.path.join(sponsors_dir, filename)
+            from fastapi import Response
+            if os.path.exists(path):
+                ext = os.path.splitext(filename)[1].lower()
+                if ext == ".png":
+                    media_type = "image/png"
+                elif ext in (".jpg", ".jpeg"):
+                    media_type = "image/jpeg"
+                elif ext == ".webp":
+                    media_type = "image/webp"
+                elif ext == ".svg":
+                    media_type = "image/svg+xml"
+                else:
+                    media_type = "application/octet-stream"
+                return FileResponse(path, media_type=media_type, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+            return JSONResponse(status_code=404, content={})
+
         @app.get("/assets/logo", response_model=None)
         async def logo() -> Any:
             candidates: List[Path] = []
@@ -157,14 +198,13 @@ class LiveTimingManager:
                 candidates.append(Path(self.root_path) / "Resources" / "logos" / "e-horizon logo quadrato_trs.png")
                 candidates.append(Path(self.root_path) / "Resources" / "logos" / "e-horizon logo.webp")
 
-            # Fallback robusto: usa Resources dell'app (dev/packaging)
             candidates.append(get_app_base_dir() / "Resources" / "logos" / "e-horizon logo quadrato_trs.png")
             candidates.append(get_app_base_dir() / "Resources" / "logos" / "e-horizon logo.webp")
 
             p = next((path for path in candidates if path.exists()), None)
             if p is not None:
                 media_type = "image/png" if p.suffix.lower() == ".png" else "image/webp"
-                return FileResponse(str(p), media_type=media_type)
+                return FileResponse(str(p), media_type=media_type, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
             return JSONResponse(status_code=404, content={})
 
         @app.websocket("/ws/timing")
@@ -204,246 +244,17 @@ class LiveTimingManager:
         return app
 
     def _html_page(self) -> str:
-        return f"""
-<!doctype html>
-<html lang="it">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>E-Horizon LiveTiming</title>
-<link rel="icon" href="/favicon.ico" sizes="any">
-<style>
-:root {{
-  --bg: #070a0f;
-  --panel: #0d1320;
-  --line: rgba(255,255,255,.10);
-  --text: #ffffff;
-  --muted: #9db0cf;
-}}
-* {{ box-sizing: border-box; }}
-body {{
-  margin: 0;
-  background: radial-gradient(circle at top, #13233f 0%, var(--bg) 40%);
-  color: var(--text);
-  font-family: system-ui, sans-serif;
-}}
-.main {{
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 20px;
-}}
-.header {{
-  display:flex;
-  flex-wrap:wrap;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  margin-bottom:16px;
-}}
-.header-right {{
-    display:flex;
-    align-items:center;
-    justify-content:flex-end;
-    min-width: 220px;
-}}
-.timer {{ font-size: clamp(24px, 4vw, 42px); font-weight: 700; }}
-.meta {{ color: var(--muted); }}
-.panel {{
-  background: color-mix(in srgb, var(--panel) 92%, black 8%);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  overflow: hidden;
-}}
-table {{ width:100%; border-collapse:collapse; }}
-th, td {{ padding: 12px; border-bottom: 1px solid var(--line); text-align:left; }}
-th {{ color: var(--muted); font-weight: 600; }}
-tr.row {{ transition: background-color .35s ease; }}
-tr.row:nth-child(even) {{ background: rgba(255,255,255,.02); }}
-
-/* Più aria ai tempi settore e alle colonne cronometriche */
-th:nth-child(4), td:nth-child(4),
-th:nth-child(5), td:nth-child(5),
-th:nth-child(6), td:nth-child(6),
-th:nth-child(7), td:nth-child(7),
-th:nth-child(10), td:nth-child(10),
-th:nth-child(11), td:nth-child(11),
-th:nth-child(12), td:nth-child(12) {{
-    min-width: 92px;
-    white-space: nowrap;
-    text-align: center;
-    font-variant-numeric: tabular-nums;
-}}
-.badge {{
-  font-size: 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 2px 10px;
-  color: var(--muted);
-}}
-.flash-passed {{ background-color:{EVENT_COLOR_MAP['passed']} !important; color:#101010; }}
-.flash-pole   {{ background-color:{EVENT_COLOR_MAP['pole']} !important; }}
-.flash-end    {{ background-color:{EVENT_COLOR_MAP['end']} !important; }}
-.flash-swap   {{ background-color:{EVENT_COLOR_MAP['swap']} !important; }}
-.flash-pitin  {{ background-color:{EVENT_COLOR_MAP['pitin']} !important; }}
-.flash-pitout {{ background-color:{EVENT_COLOR_MAP['pitout']} !important; color:#101010; }}
-</style>
-</head>
-<body>
-  <main class="main">
-    <div class="header">
-      <div>
-        <h1 style="margin:0">E-Horizon Live Timing</h1>
-        <div id="sessionMeta" class="meta">In attesa dati sessione...</div>
-      </div>
-            <div class="header-right">
-                <div id="timer" class="timer">--:--:--</div>
-            </div>
-    </div>
-
-    <div class="panel">
-      <table>
-        <thead>
-          <tr>
-            <th>Pos</th>
-            <th>Pilota</th>
-            <th>Team</th>
-            <th>S1</th>
-            <th>S2</th>
-            <th>S3</th>
-                        <th id="colBestLastA">Best</th>
-            <th>Laps</th>
-            <th>Status</th>
-            <th>Gap</th>
-            <th>Int</th>
-                        <th id="colBestLastB">Last</th>
-          </tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
-  </main>
-
-<script>
-const host = window.location.host;
-const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-const httpProto = window.location.protocol;
-
-const apiBase = `${{httpProto}}//${{host}}`;
-const wsBase  = `${{protocol}}://${{host}}`;
-
-const elRows = document.getElementById("rows");
-const elTimer = document.getElementById("timer");
-const elMeta = document.getElementById("sessionMeta");
-const elBestLastA = document.getElementById("colBestLastA");
-const elBestLastB = document.getElementById("colBestLastB");
-
-const state = {{ rows: new Map(), isRace: false }};
-
-function detectIsRace(session) {{
-    if (!session || typeof session !== 'object') return false;
-
-    const direct = session.is_race ?? session.isRace ?? session.race;
-    if (typeof direct === 'boolean') return direct;
-    if (typeof direct === 'number') return direct !== 0;
-    if (typeof direct === 'string') {{
-        const v = direct.trim().toLowerCase();
-        if (['1', 'true', 'yes', 'on', 'race', 'gara'].includes(v)) return true;
-        if (['0', 'false', 'no', 'off', 'practice', 'qualifying', 'qualifica'].includes(v)) return false;
-    }}
-
-    const st = String(session.sessionType ?? '').toLowerCase();
-    return st.includes('race') || st.includes('gara');
-}}
-
-function syncBestLastHeaders() {{
-    if (!elBestLastA || !elBestLastB) return;
-    if (state.isRace) {{
-        elBestLastA.textContent = 'Last';
-        elBestLastB.textContent = 'Best';
-    }} else {{
-        elBestLastA.textContent = 'Best';
-        elBestLastB.textContent = 'Last';
-    }}
-}}
-
-function render(drivers) {{
-  if (!Array.isArray(drivers)) return;
-
-  drivers.sort((a,b) => (a.position || 999) - (b.position || 999));
-
-  elRows.innerHTML = drivers.map(d => `
-    <tr class="row" data-key="${{d.number ?? d.driverId ?? d.raceNumber ?? ''}}">
-      <td>${{d.position ?? ''}}</td>
-      <td>${{d.name_surname ?? ''}}</td>
-      <td>${{d.team ?? ''}}</td>
-      <td>${{d.sector1 ?? ''}}</td>
-      <td>${{d.sector2 ?? ''}}</td>
-      <td>${{d.sector3 ?? ''}}</td>
-            <td>${{state.isRace ? (d.lastLap ?? '') : (d.fastLap ?? '')}}</td>
-      <td>${{d.laps ?? ''}}</td>
-      <td><span class="badge">${{d.status ?? ''}}</span></td>
-      <td>${{d.gap ?? ''}}</td>
-      <td>${{d.interval ?? ''}}</td>
-            <td>${{state.isRace ? (d.fastLap ?? '') : (d.lastLap ?? '')}}</td>
-    </tr>`).join("");
-
-  state.rows.clear();
-  elRows.querySelectorAll("tr").forEach(tr => state.rows.set(String(tr.dataset.key), tr));
-}}
-
-function flash(key, kind) {{
-  const row = state.rows.get(String(key));
-  if (!row || !kind) return;
-
-  const cls = "flash-" + String(kind).toLowerCase();
-  row.classList.add(cls);
-  setTimeout(() => row.classList.remove(cls), 800);
-}}
-
-function updateSession(data) {{
-  if (!data || typeof data !== 'object') return;
-    if (elTimer) elTimer.textContent = data.sessionTime || '--:--:--';
-
-    state.isRace = detectIsRace(data);
-    syncBestLastHeaders();
-
-  const type = data.sessionType || 'Session';
-  const status = data.sessionStatus || 'N/A';
-  const idx = data.index != null ? ` #${{data.index + 1}}` : '';
-  elMeta.textContent = `${{type}}${{idx}} - ${{status}}`;
-}}
-
-async function boot() {{
-  try {{
-    const res = await fetch(`${{apiBase}}/api/snapshot`);
-    const snap = await res.json();
-    updateSession(snap.session);
-    render(snap.drivers || []);
-  }} catch (_) {{}}
-
-  const ws = new WebSocket(`${{wsBase}}/ws/timing`);
-  ws.onmessage = e => {{
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'snapshot') {{
-      updateSession(msg.data.session);
-      render(msg.data.drivers || []);
-    }}
-    if (msg.type === 'drivers') render(msg.data || []);
-    if (msg.type === 'session') updateSession(msg.data);
-  }};
-
-  const we = new WebSocket(`${{wsBase}}/ws/event`);
-  we.onmessage = e => {{
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'event') flash(msg.data.key, msg.data.kind);
-  }};
-}}
-
-boot();
-</script>
-</body>
-</html>
-"""
+            import os
+            template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Resources", "web_templates", "liverace.html")
+            with open(template_path, encoding="utf-8") as f:
+                        html = f.read()
+            # Inserisci dinamicamente i colori degli eventi
+            event_css = "\n".join([
+                        f".flash-{k} {{ background-color:{v} !important;{' color:#101010;' if k in ['passed','pitout'] else ''} }}"
+                        for k, v in EVENT_COLOR_MAP.items()
+                ])
+            html = html.replace("/* Gli stili flash-* saranno gestiti dinamicamente in Python */", event_css)
+            return html
 
     async def _start_async(self) -> None:
         self.app_data = self.build_app_data()
