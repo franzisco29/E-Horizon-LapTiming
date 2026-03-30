@@ -1,10 +1,25 @@
-version: 3
+version: "3"
 agent:
   authtoken: 3AqYa5ynYWEYmf0T5uQ7mKDO2AN_2bBmFGAcFEkaMfGF7sBRj
-  
-tunnels:
-  live-timing:
-    addr: 127.0.0.1:8888
-    proto: http
-    domain: alphonso-supersacerdotal-tomboyishly.ngrok-free.dev
+
+endpoints:
+  - name: live-timing
+    url: https://alphonso-supersacerdotal-tomboyishly.ngrok-free.dev
     metadata: "Live Timing Hub"
+    upstream:
+      url: http://127.0.0.1:8888
+    traffic_policy:
+      on_http_request:
+        - actions:
+            - type: add-headers
+              config:
+                headers:
+                  ngrok-skip-browser-warning: "true"
+      on_http_response:
+        - actions:
+            - type: add-headers
+              config:
+                headers:
+                  Access-Control-Allow-Origin: "*"
+                  Access-Control-Allow-Methods: "GET, POST, OPTIONS"
+                  Access-Control-Allow-Headers: "*"

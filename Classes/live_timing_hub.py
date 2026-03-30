@@ -5,8 +5,10 @@ import json
 import os
 import subprocess
 import threading
+import time
+import urllib.request
 from dataclasses import asdict, dataclass, field, is_dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -28,9 +30,54 @@ EVENT_COLOR_MAP: Dict[str, str] = {
     "pitout": "#00C853",
 }
 
-# Public tunnel settings (hardcoded for now, as requested).
+# Public tunnel settings.
 PUBLIC_TUNNEL_DOMAIN = "alphonso-supersacerdotal-tomboyishly.ngrok-free.dev"
-PUBLIC_TUNNEL_AUTHTOKEN = ""
+PUBLIC_TUNNEL_AUTHTOKEN = "3AqYa5ynYWEYmf0T5uQ7mKDO2AN_2bBmFGAcFEkaMfGF7sBRj"
+
+# ngrok local API
+NGROK_LOCAL_API = "http://localhost:4040/api"
+# ngrok cloud API key (attualmente non usata: l'API cloud non supporta
+# la cancellazione di endpoint ephemeral creati dall'agent)
+NGROK_API_KEY = "3BerehywJAuyqPeFtEySYxA0CaZ_aPJkh1ppjedRRiCepeAk"
+
+
+def _ngrok_local_api(path: str, method: str = "GET") -> Optional[Any]:
+    """Chiama l'API locale di ngrok (localhost:4040). Ritorna JSON o None."""
+    try:
+        req = urllib.request.Request(f"{NGROK_LOCAL_API}{path}", method=method)
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
+def _ngrok_kill_all_endpoints() -> None:
+    """
+    Chiude tutti gli endpoint ngrok attivi via API locale (localhost:4040).
+    Usa /api/endpoints (nuovo) con fallback su /api/tunnels (deprecato).
+    Nota: l'API cloud può cancellare solo endpoint di tipo 'cloud',
+    non quelli ephemeral creati dall'agent — quindi la pulizia si fa solo in locale.
+    """
+    # Prova prima con il nuovo endpoint /api/endpoints
+    result = _ngrok_local_api("/endpoints")
+    if result:
+        for ep in result.get("endpoints", []):
+            eid = ep.get("id", "")
+            url  = ep.get("public_url", ep.get("url", ""))
+            if eid:
+                _ngrok_local_api(f"/endpoints/{eid}", method="DELETE")
+                log(f"[LiveTiming][ngrok] Endpoint '{url}' chiuso via API locale")
+        return  # se ha funzionato non serve il fallback
+
+    # Fallback: /api/tunnels (deprecato ma ancora supportato)
+    result = _ngrok_local_api("/tunnels")
+    if result:
+        for tunnel in result.get("tunnels", []):
+            name = tunnel.get("name", "")
+            if name:
+                _ngrok_local_api(f"/tunnels/{name}", method="DELETE")
+                log(f"[LiveTiming][ngrok] Tunnel '{name}' chiuso via API locale")
 
 
 @dataclass
@@ -68,6 +115,8 @@ class LiveTimingManager:
     _ngrok_proc: Optional[subprocess.Popen[str]] = None
     _ngrok_log_thread: Optional[threading.Thread] = None
 
+    on_public_online: Optional[callable] = None  # callback per segnalare online
+
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
@@ -101,7 +150,7 @@ class LiveTimingManager:
 
         future = asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
         try:
-            future.result(timeout=7)
+            future.result(timeout=10)
         except Exception:
             pass
         self._loop.call_soon_threadsafe(self._loop.stop)
@@ -123,7 +172,6 @@ class LiveTimingManager:
             allow_headers=["*"],
         )
 
-        # Serve i file statici (css/js) dalla cartella web_templates
         import os
         from fastapi.staticfiles import StaticFiles
         static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Resources", "web_templates")
@@ -143,13 +191,9 @@ class LiveTimingManager:
         @app.get("/favicon.ico", response_model=None)
         async def favicon() -> Any:
             candidates: List[Path] = []
-
             if self.root_path:
                 candidates.append(Path(self.root_path) / "Resources" / "icons" / "favicon.ico")
-
-            # Fallback robusto: usa Resources dell'app (dev/packaging)
             candidates.append(get_app_base_dir() / "Resources" / "icons" / "favicon.ico")
-
             p = next((path for path in candidates if path.exists()), None)
             if p is not None:
                 return FileResponse(str(p), media_type="image/x-icon")
@@ -193,14 +237,11 @@ class LiveTimingManager:
         @app.get("/assets/logo", response_model=None)
         async def logo() -> Any:
             candidates: List[Path] = []
-
             if self.root_path:
                 candidates.append(Path(self.root_path) / "Resources" / "logos" / "e-horizon logo quadrato_trs.png")
                 candidates.append(Path(self.root_path) / "Resources" / "logos" / "e-horizon logo.webp")
-
             candidates.append(get_app_base_dir() / "Resources" / "logos" / "e-horizon logo quadrato_trs.png")
             candidates.append(get_app_base_dir() / "Resources" / "logos" / "e-horizon logo.webp")
-
             p = next((path for path in candidates if path.exists()), None)
             if p is not None:
                 media_type = "image/png" if p.suffix.lower() == ".png" else "image/webp"
@@ -211,19 +252,15 @@ class LiveTimingManager:
         async def ws_timing(ws: WebSocket) -> None:
             await ws.accept()
             self._clients.add(ws)
-
             await ws.send_text(
-                json.dumps(
-                    {
-                        "type": "snapshot",
-                        "data": {
-                            "session": self._session_data,
-                            "drivers": self._drivers_data,
-                        },
-                    }
-                )
+                json.dumps({
+                    "type": "snapshot",
+                    "data": {
+                        "session": self._session_data,
+                        "drivers": self._drivers_data,
+                    },
+                })
             )
-
             try:
                 while True:
                     await ws.receive_text()
@@ -234,7 +271,6 @@ class LiveTimingManager:
         async def ws_event(ws: WebSocket) -> None:
             await ws.accept()
             self._event_clients.add(ws)
-
             try:
                 while True:
                     await ws.receive_text()
@@ -244,31 +280,26 @@ class LiveTimingManager:
         return app
 
     def _html_page(self) -> str:
-            import os
-            template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Resources", "web_templates", "liverace.html")
-            with open(template_path, encoding="utf-8") as f:
-                        html = f.read()
-            # Inserisci dinamicamente i colori degli eventi
-            event_css = "\n".join([
-                        f".flash-{k} {{ background-color:{v} !important;{' color:#101010;' if k in ['passed','pitout'] else ''} }}"
-                        for k, v in EVENT_COLOR_MAP.items()
-                ])
-            html = html.replace("/* Gli stili flash-* saranno gestiti dinamicamente in Python */", event_css)
-            return html
+        import os
+        template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Resources", "web_templates", "liverace.html")
+        with open(template_path, encoding="utf-8") as f:
+            html = f.read()
+        event_css = "\n".join([
+            f".flash-{k} {{ background-color:{v} !important;{' color:#101010;' if k in ['passed','pitout'] else ''} }}"
+            for k, v in EVENT_COLOR_MAP.items()
+        ])
+        html = html.replace("/* Gli stili flash-* saranno gestiti dinamicamente in Python */", event_css)
+        return html
 
     async def _start_async(self) -> None:
         self.app_data = self.build_app_data()
-
         self._server_data = uvicorn.Server(
             uvicorn.Config(self.app_data, host=self.address, port=self.port, log_level="warning")
         )
-
-        # log reachable URL for data/web endpoints (single port)
         try:
             log(f"[LiveTiming] DATA+WEB server listening at http://{self.address}:{self.port}")
         except Exception:
             pass
-
         self.enabled = True
         self._server_task = asyncio.create_task(self._server_data.serve())
         self._start_public_tunnel()
@@ -284,6 +315,10 @@ class LiveTimingManager:
                     pass
         self._stop_public_tunnel()
 
+    # ------------------------------------------------------------------
+    # ngrok tunnel management — semplice e stabile
+    # ------------------------------------------------------------------
+
     def _start_public_tunnel(self) -> None:
         if not self.public_enabled:
             return
@@ -291,114 +326,95 @@ class LiveTimingManager:
         if self._ngrok_proc and self._ngrok_proc.poll() is None:
             return
 
-        # Use ngrok start --all to consolidate multiple tunnels in a single agent session.
-        # This avoids hitting the 3 simultaneous sessions limit on free tier.
-        # Tunnels are defined in Tools/ngrok/ngrok.yml inside the project directory.
-        # (See: https://ngrok.com/docs/agent/config/)
-        ngrok_config = Path(__file__).resolve().parent.parent / "Tools" / "ngrok" / "ngrok.yml"
-        cmd = [
-            "ngrok",
-            "start",
-            "--all",
-            "--config", str(ngrok_config),
-        ]
+        def ngrok_thread():
+            log("[LiveTiming][ngrok] Pulizia endpoint precedenti...")
+            _ngrok_kill_all_endpoints()
+            time.sleep(1.5)
+            ngrok_config = Path(__file__).resolve().parent.parent / "Tools" / "ngrok" / "ngrok.yml"
+            cmd = ["ngrok", "start", "--all", "--config", str(ngrok_config)]
+            env = os.environ.copy()
+            if PUBLIC_TUNNEL_AUTHTOKEN:
+                env["NGROK_AUTHTOKEN"] = PUBLIC_TUNNEL_AUTHTOKEN
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                self._ngrok_proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    creationflags=creationflags,
+                )
+                log(f"[LiveTiming][ngrok] Avviato → https://{PUBLIC_TUNNEL_DOMAIN}")
+                self._ngrok_log_thread = threading.Thread(
+                    target=self._consume_ngrok_logs,
+                    name="LiveTimingNgrokLogThread",
+                    daemon=True,
+                )
+                self._ngrok_log_thread.start()
+            except FileNotFoundError:
+                log("[LiveTiming][ngrok] ngrok non trovato. Installalo o disabilita public_enabled.")
+            except Exception as ex:
+                log(f"[LiveTiming][ngrok] Errore avvio: {ex}")
 
-        env = os.environ.copy()
-        if PUBLIC_TUNNEL_AUTHTOKEN:
-            env["NGROK_AUTHTOKEN"] = PUBLIC_TUNNEL_AUTHTOKEN
-
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-        try:
-            self._ngrok_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env,
-                creationflags=creationflags,
-            )
-            log(f"[LiveTiming] ngrok agent started (configuration: {ngrok_config})")
-            log(f"[LiveTiming] Public URL: https://{PUBLIC_TUNNEL_DOMAIN}")
-
-            self._ngrok_log_thread = threading.Thread(
-                target=self._consume_ngrok_logs,
-                name="LiveTimingNgrokLogThread",
-                daemon=True,
-            )
-            self._ngrok_log_thread.start()
-        except FileNotFoundError:
-            log("[LiveTiming] ngrok not found. Install ngrok or disable public_enabled.")
-        except Exception as ex:
-            log(f"[LiveTiming] Failed to start ngrok: {ex}")
+        threading.Thread(target=ngrok_thread, name="NgrokStartThread", daemon=True).start()
 
     def _stop_public_tunnel(self) -> None:
+        # 1. Chiudi i tunnel via API (libera l'endpoint lato server ngrok)
+        log("[LiveTiming][ngrok] Chiusura endpoint in corso...")
+        _ngrok_kill_all_endpoints()
+        time.sleep(0.5)
+
+        # 2. Killa il processo locale
         proc = self._ngrok_proc
         self._ngrok_proc = None
-
         if not proc:
             return
-
         try:
             proc.terminate()
-            proc.wait(timeout=2)
+            proc.wait(timeout=4)
         except Exception:
             try:
                 proc.kill()
             except Exception:
                 pass
 
-        try:
-            log("[LiveTiming] ngrok stopped")
-        except Exception:
-            pass
+        log("[LiveTiming][ngrok] ngrok fermato")
 
     def _consume_ngrok_logs(self) -> None:
         proc = self._ngrok_proc
         if not proc or not proc.stdout:
             return
-
         try:
             for raw in proc.stdout:
                 line = raw.strip()
-                if line:
-                    log(f"[LiveTiming][ngrok] {line}")
-                    if "ERR_NGROK_334" in line:
-                        log(
-                            "[LiveTiming][ngrok] Reserved domain already online on another ngrok endpoint. "
-                            "Stop the active endpoint from ngrok dashboard (or other machine) and restart LiveTiming."
-                        )
+                if not line:
+                    continue
+                log(f"[LiveTiming][ngrok] {line}")
+                # Notifica la UI quando ngrok è online
+                if ("started tunnel" in line.lower() or "client session established" in line.lower() or "url=https://" in line.lower()):
+                    if self.on_public_online:
+                        self.on_public_online()
+                        self.on_public_online = None  # chiama solo una volta
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def send_session_info(self, data: Any) -> None:
         self._session_data = self._normalize_session_data(data)
-        self._run_in_loop(
-            self._broadcast({
-                "type": "session",
-                "data": self._session_data,
-            })
-        )
+        self._run_in_loop(self._broadcast({"type": "session", "data": self._session_data}))
 
     def send_race_data(self, drivers: Iterable[Any]) -> None:
         self._drivers_data = self._normalize_drivers_data(drivers)
-        self._run_in_loop(
-            self._broadcast({
-                "type": "drivers",
-                "data": self._drivers_data,
-            })
-        )
+        self._run_in_loop(self._broadcast({"type": "drivers", "data": self._drivers_data}))
 
     def send_event(self, key: int, kind: str) -> None:
-        payload = {
-            "type": "event",
-            "data": {
-                "key": key,
-                "kind": str(kind).lower(),
-            },
-        }
+        payload = {"type": "event", "data": {"key": key, "kind": str(kind).lower()}}
         self._run_in_loop(self._broadcast_event(payload))
 
     def _run_in_loop(self, coro: Any) -> None:
@@ -409,19 +425,16 @@ class LiveTimingManager:
     def _normalize_session_data(self, data: Any) -> Dict[str, Any]:
         if isinstance(data, dict):
             return self._json_ready(data)
-
         if hasattr(data, "session_to_live_dict") and callable(getattr(data, "session_to_live_dict")):
             try:
                 return self._json_ready(data.session_to_live_dict())
             except Exception:
                 pass
-
         if hasattr(data, "to_live_dict") and callable(getattr(data, "to_live_dict")):
             try:
                 return self._json_ready(data.to_live_dict())
             except Exception:
                 pass
-
         return self._json_ready(data)
 
     def _normalize_drivers_data(self, drivers: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -430,39 +443,32 @@ class LiveTimingManager:
             if isinstance(item, dict):
                 out.append(self._json_ready(item))
                 continue
-
             if hasattr(item, "to_live_dict") and callable(getattr(item, "to_live_dict")):
                 try:
                     out.append(self._json_ready(item.to_live_dict()))
                     continue
                 except Exception:
                     pass
-
             out.append(self._json_ready(item))
         return out
 
     def _json_ready(self, value: Any) -> Any:
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
-
         if isinstance(value, datetime):
             return value.isoformat()
-        if isinstance(value, (date, time)):
+        if isinstance(value, (date, dt_time)):
             return value.isoformat()
         if isinstance(value, timedelta):
             return str(value)
-
         if isinstance(value, dict):
             return {str(k): self._json_ready(v) for k, v in value.items()}
         if isinstance(value, (list, tuple, set)):
             return [self._json_ready(v) for v in value]
-
         if is_dataclass(value):
             return self._json_ready(asdict(value))
-
         if hasattr(value, "__dict__"):
             return self._json_ready(vars(value))
-
         return str(value)
 
     async def _broadcast(self, payload: Dict[str, Any]) -> None:

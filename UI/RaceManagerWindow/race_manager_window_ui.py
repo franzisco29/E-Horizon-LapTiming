@@ -23,6 +23,7 @@ class RaceManagerWindowRefs:
     save_results_btn: QPushButton
     analytics_btn: QPushButton
     live_btn: QPushButton
+    live_status_lbl: QLabel
     debug_btn: QPushButton
     pre_race_minutes_box: QComboBox
     pre_race_btn: QPushButton
@@ -134,6 +135,9 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     ip_val.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 
     live_btn = _btn("Live", 74)
+    live_status_lbl = QLabel("Privata")
+    live_status_lbl.setMinimumWidth(60)
+    live_status_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
     debug_btn = _btn("Debug", 92)
 
     pre_lbl = QLabel("Pre Gara:")
@@ -180,6 +184,7 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     top_btns_lay.setContentsMargins(0, 0, 0, 0)
     top_btns_lay.setSpacing(8)
     top_btns_lay.addWidget(live_btn)
+    top_btns_lay.addWidget(live_status_lbl)
     top_btns_lay.addWidget(debug_btn)
 
     gl_dir_service.addWidget(ip_lbl,      0, 0, alignment=Qt.AlignVCenter)
@@ -279,7 +284,6 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         pit_label             = pit_val,
         track_value           = track_val,
         ip_label              = ip_val,
-
         racelist_box          = racelist_box,
         session_box           = session_box,
         load_btn              = load_btn,
@@ -288,14 +292,12 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         save_results_btn      = save_btn,
         analytics_btn         = analytics_btn,
         live_btn              = live_btn,
+        live_status_lbl       = live_status_lbl,
         debug_btn             = debug_btn,
-
         pre_race_minutes_box  = pre_minutes,
         pre_race_btn          = pre_btn,
-
         status_box            = status_box,
         apply_status_btn      = apply_status_btn,
-
         ys1_btn               = btns["YS1"],
         ys2_btn               = btns["YS2"],
         ys3_btn               = btns["YS3"],
@@ -309,7 +311,6 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         op_pit_btn            = btns["OP Pit"],
         cl_pit_btn            = btns["CL Pit"],
         flag_group            = gb_flag,
-
         lap_table             = table,
     )
     return root, refs

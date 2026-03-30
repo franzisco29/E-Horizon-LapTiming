@@ -530,7 +530,19 @@ class RaceManagerWindow(QWidget):
                 root_path=self.settings.root_path,
                 public_enabled=live_public_enabled,
             )
+            def set_on_air():
+                self.refs.live_status_lbl.setText("ON AIR")
+                self.refs.live_status_lbl.setStyleSheet("color: #00c853; font-weight: bold;")
+            self.live_man.on_public_online = set_on_air
             self.live_man.start()
+
+            # Aggiorna la label di stato live (iniziale)
+            if live_public_enabled:
+                self.refs.live_status_lbl.setText("Pubblica")
+                self.refs.live_status_lbl.setStyleSheet("color: green; font-weight: bold;")
+            else:
+                self.refs.live_status_lbl.setText("Privata")
+                self.refs.live_status_lbl.setStyleSheet("color: gray;")
 
             log(
                 f"[RaceWindow] LiveTiming started on {live_ip}:{live_port} "
