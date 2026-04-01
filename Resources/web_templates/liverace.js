@@ -1,3 +1,6 @@
+
+// DEBUG: Log di avvio JS
+console.log("[LiveTiming] JS caricato e attivo");
 // Carica dinamicamente i loghi sponsor se presenti
 
 fetch('/assets/sponsors')
@@ -42,7 +45,9 @@ const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
 const httpProto = window.location.protocol;
 
 const apiBase = `${httpProto}//${host}`;
+
 const wsBase  = `${protocol}://${host}`;
+console.log(`[LiveTiming] wsBase: ${wsBase}`);
 
 const elRows = document.getElementById("rows");
 const elTimer = document.getElementById("timer");
@@ -104,10 +109,18 @@ function render(drivers) {
   elRows.querySelectorAll("tr").forEach(tr => state.rows.set(String(tr.dataset.key), tr));
 }
 
-function flash(key, kind) {
-  const row = state.rows.get(String(key));
-  if (!row || !kind) return;
 
+function flash(key, kind) {
+  console.log(`[LiveTiming] flash() chiamata con key=`, key, "kind=", kind);
+  const row = state.rows.get(String(key));
+  if (!row) {
+    console.warn(`[LiveTiming] Nessuna row trovata per key=`, key);
+    return;
+  }
+  if (!kind) {
+    console.warn(`[LiveTiming] Nessun kind fornito per flash`);
+    return;
+  }
   const cls = "flash-" + String(kind).toLowerCase();
   row.classList.add(cls);
   setTimeout(() => row.classList.remove(cls), 800);
@@ -134,9 +147,14 @@ async function boot() {
     render(snap.drivers || []);
   } catch (_) {}
 
+
   const ws = new WebSocket(`${wsBase}/ws/timing`);
+  ws.onopen = () => console.log("[LiveTiming] WS /ws/timing connesso");
+  ws.onerror = err => console.error("[LiveTiming] WS /ws/timing errore:", err);
+  ws.onclose = () => console.warn("[LiveTiming] WS /ws/timing chiuso");
   ws.onmessage = e => {
     const msg = JSON.parse(e.data);
+    console.log("[LiveTiming] WS /ws/timing messaggio:", msg);
     if (msg.type === 'snapshot') {
       updateSession(msg.data.session);
       render(msg.data.drivers || []);
@@ -146,8 +164,12 @@ async function boot() {
   };
 
   const we = new WebSocket(`${wsBase}/ws/event`);
+  we.onopen = () => console.log("[LiveTiming] WS /ws/event connesso");
+  we.onerror = err => console.error("[LiveTiming] WS /ws/event errore:", err);
+  we.onclose = () => console.warn("[LiveTiming] WS /ws/event chiuso");
   we.onmessage = e => {
     const msg = JSON.parse(e.data);
+    console.log("[LiveTiming] WS /ws/event messaggio:", msg);
     if (msg.type === 'event') flash(msg.data.key, msg.data.kind);
   };
 }

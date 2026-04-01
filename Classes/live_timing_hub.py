@@ -10,7 +10,7 @@ import urllib.request
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -114,8 +114,9 @@ class LiveTimingManager:
     _ready_evt: threading.Event = field(default_factory=threading.Event)
     _ngrok_proc: Optional[subprocess.Popen[str]] = None
     _ngrok_log_thread: Optional[threading.Thread] = None
+    _ngrok_start_time: Optional[float] = None
 
-    on_public_online: Optional[callable] = None  # callback per segnalare online
+    on_public_online: Optional[Callable[[], None]] = None  # callback per segnalare online
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -337,6 +338,7 @@ class LiveTimingManager:
                 env["NGROK_AUTHTOKEN"] = PUBLIC_TUNNEL_AUTHTOKEN
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             try:
+                self._ngrok_start_time = time.time()
                 self._ngrok_proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -354,12 +356,35 @@ class LiveTimingManager:
                     daemon=True,
                 )
                 self._ngrok_log_thread.start()
+                # Fallback: dopo 8 secondi controlla l'API di ngrok se il callback non è ancora stato chiamato
+                threading.Thread(
+                    target=self._ngrok_fallback_check,
+                    name="NgrokFallbackCheckThread",
+                    daemon=True,
+                ).start()
             except FileNotFoundError:
                 log("[LiveTiming][ngrok] ngrok non trovato. Installalo o disabilita public_enabled.")
             except Exception as ex:
                 log(f"[LiveTiming][ngrok] Errore avvio: {ex}")
 
         threading.Thread(target=ngrok_thread, name="NgrokStartThread", daemon=True).start()
+
+    def _ngrok_fallback_check(self) -> None:
+        """Fallback: controlla l'API di ngrok dopo 8 sec se il callback non è stato ancora chiamato."""
+        time.sleep(8)
+        if not self.on_public_online:
+            return  # callback già chiamato
+        try:
+            result = _ngrok_local_api("/status")
+            if result and result.get("status") == "online":
+                log("[LiveTiming][ngrok] API online rilevata via fallback")
+                if self.on_public_online:
+                    try:
+                        self.on_public_online()
+                    finally:
+                        self.on_public_online = None
+        except Exception:
+            pass
 
     def _stop_public_tunnel(self) -> None:
         # 1. Chiudi i tunnel via API (libera l'endpoint lato server ngrok)
@@ -383,6 +408,23 @@ class LiveTimingManager:
 
         log("[LiveTiming][ngrok] ngrok fermato")
 
+    def _ngrok_fallback_check(self) -> None:
+        """Fallback: controlla l'API di ngrok dopo 8 sec se il callback non è stato ancora chiamato."""
+        time.sleep(8)
+        if not self.on_public_online:
+            return  # callback già chiamato
+        try:
+            result = _ngrok_local_api("/status")
+            if result and result.get("status") == "online":
+                log("[LiveTiming][ngrok] API online rilevata via fallback")
+                if self.on_public_online:
+                    try:
+                        self.on_public_online()
+                    finally:
+                        self.on_public_online = None
+        except Exception:
+            pass
+
     def _consume_ngrok_logs(self) -> None:
         proc = self._ngrok_proc
         if not proc or not proc.stdout:
@@ -393,11 +435,13 @@ class LiveTimingManager:
                 if not line:
                     continue
                 log(f"[LiveTiming][ngrok] {line}")
-                # Notifica la UI quando ngrok è online
-                if ("started tunnel" in line.lower() or "client session established" in line.lower() or "url=https://" in line.lower()):
+                # Notifica la UI quando ngrok è online (pattern matching)
+                if ("started tunnel" in line.lower() or "client session established" in line.lower() or "url=https://" in line.lower() or "online" in line.lower()):
                     if self.on_public_online:
-                        self.on_public_online()
-                        self.on_public_online = None  # chiama solo una volta
+                        try:
+                            self.on_public_online()
+                        finally:
+                            self.on_public_online = None  # chiama solo una volta
         except Exception:
             pass
 

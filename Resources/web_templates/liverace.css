@@ -140,3 +140,10 @@ th:nth-child(12), td:nth-child(12) {
   transition: none;
 }
 /* Gli stili flash-* saranno gestiti dinamicamente in Python */
+
+.flash-passed { background-color: #E6C202 !important; color: #101010; }
+.flash-pole { background-color: #9966CC !important; }
+.flash-end { background-color: #545454 !important; }
+.flash-swap { background-color: #1E90FF !important; }
+.flash-pitin { background-color: #FF8C00 !important; }
+.flash-pitout { background-color: #00C853 !important; color: #101010; }

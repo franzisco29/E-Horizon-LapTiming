@@ -93,6 +93,14 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         QPushButton:hover { background: rgba(255,255,255,0.15); }
         QTableWidget { background: #232629; border-radius: 4px; }
         QLabel { color: rgba(233,238,245,0.92); }
+        QLabel#LiveStatusBadge {
+            border: 1px solid rgba(255,255,255,0.22);
+            border-radius: 10px;
+            padding: 2px 10px;
+            font-weight: 700;
+            background: rgba(255,255,255,0.06);
+            color: #9aa4b2;
+        }
     """)
 
     main_layout = QVBoxLayout(root)
@@ -135,9 +143,10 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     ip_val.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 
     live_btn = _btn("Live", 74)
-    live_status_lbl = QLabel("Privata")
-    live_status_lbl.setMinimumWidth(60)
-    live_status_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+    live_status_lbl = QLabel("OFF")
+    live_status_lbl.setObjectName("LiveStatusBadge")
+    live_status_lbl.setMinimumWidth(86)
+    live_status_lbl.setAlignment(Qt.AlignCenter)
     debug_btn = _btn("Debug", 92)
 
     pre_lbl = QLabel("Pre Gara:")
@@ -183,8 +192,16 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     top_btns_lay = QHBoxLayout(top_btns)
     top_btns_lay.setContentsMargins(0, 0, 0, 0)
     top_btns_lay.setSpacing(8)
-    top_btns_lay.addWidget(live_btn)
-    top_btns_lay.addWidget(live_status_lbl)
+
+    live_controls = QWidget(top_btns)
+    live_controls_lay = QHBoxLayout(live_controls)
+    live_controls_lay.setContentsMargins(0, 0, 0, 0)
+    live_controls_lay.setSpacing(6)
+    live_controls_lay.addWidget(live_btn)
+    live_controls_lay.addWidget(live_status_lbl)
+
+    top_btns_lay.addWidget(live_controls)
+    top_btns_lay.addStretch(1)
     top_btns_lay.addWidget(debug_btn)
 
     gl_dir_service.addWidget(ip_lbl,      0, 0, alignment=Qt.AlignVCenter)

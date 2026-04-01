@@ -71,6 +71,7 @@ class RaceManagerWindow(QWidget):
     sig_status = Signal(list)
     sig_log = Signal(str)
     sig_command = Signal(str, str)
+    sig_live_public_online = Signal()
 
     def __init__(self, settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -262,6 +263,24 @@ class RaceManagerWindow(QWidget):
         self.sig_transponder.connect(self._on_transponder_gui_thread)
         self.sig_log.connect(self._on_log_gui_thread)
         self.sig_command.connect(self._on_command_gui_thread)
+        self.sig_live_public_online.connect(self._on_live_public_online)
+
+    def _set_live_badge(self, text: str, color: str, background: str) -> None:
+        self.refs.live_status_lbl.setText(text)
+        self.refs.live_status_lbl.setStyleSheet(
+            f"QLabel#LiveStatusBadge {{"
+            f"border: 1px solid {color};"
+            f"border-radius: 10px;"
+            f"padding: 2px 10px;"
+            f"font-weight: 700;"
+            f"background: {background};"
+            f"color: {color};"
+            f"}}"
+        )
+
+    @Slot()
+    def _on_live_public_online(self) -> None:
+        self._set_live_badge("ON AIR", "#00e676", "rgba(0,230,118,0.12)")
 
     @Slot(str)
     def _on_log_gui_thread(self, msg: str) -> None:
@@ -518,6 +537,7 @@ class RaceManagerWindow(QWidget):
 
         self.live_man = None
         self.refs.live_btn.setEnabled(bool(self.settings.live_enabled))
+        self._set_live_badge("OFF", "#9aa4b2", "rgba(255,255,255,0.06)")
 
         if self.settings.live_enabled:
             live_ip = self.settings.live_ip
@@ -530,19 +550,14 @@ class RaceManagerWindow(QWidget):
                 root_path=self.settings.root_path,
                 public_enabled=live_public_enabled,
             )
-            def set_on_air():
-                self.refs.live_status_lbl.setText("ON AIR")
-                self.refs.live_status_lbl.setStyleSheet("color: #00c853; font-weight: bold;")
-            self.live_man.on_public_online = set_on_air
+            self.live_man.on_public_online = self.sig_live_public_online.emit
             self.live_man.start()
 
             # Aggiorna la label di stato live (iniziale)
             if live_public_enabled:
-                self.refs.live_status_lbl.setText("Pubblica")
-                self.refs.live_status_lbl.setStyleSheet("color: green; font-weight: bold;")
+                self._set_live_badge("AVVIO...", "#f6c453", "rgba(246,196,83,0.14)")
             else:
-                self.refs.live_status_lbl.setText("Privata")
-                self.refs.live_status_lbl.setStyleSheet("color: gray;")
+                self._set_live_badge("LOCALE", "#8ab4f8", "rgba(138,180,248,0.14)")
 
             log(
                 f"[RaceWindow] LiveTiming started on {live_ip}:{live_port} "
@@ -1827,8 +1842,17 @@ class RaceManagerWindow(QWidget):
             self.race_man.set_status(row, st)
         except Exception:
             pass
+
         self.write_lap_timing(self.session_race_list)
         log(f"[RaceWindow] Apply status: row={row} -> {st}")
+
+        # Aggiorna la classifica live sul web se live_man è attivo
+        if self.live_man is not None and hasattr(self.live_man, "send_race_data"):
+            try:
+                self.live_man.send_race_data(self.session_race_list.drivers)
+                log("[RaceWindow] LiveTiming aggiornato dopo cambio stato pilota")
+            except Exception as e:
+                log(f"[RaceWindow] Errore aggiornamento LiveTiming: {e}")
 
         ended = self.race_man.all_ended()
         log(f"[RaceWindow] all_ended()={ended} dopo cambio stato pilota (row={row})")

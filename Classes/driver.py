@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from Modules.enums import RaceState
 from Modules.time_format import fmt_mm_ss_mmm, fmt_ss_mmm
@@ -33,6 +33,7 @@ class Driver:
     last_lap: timedelta = field(default_factory=lambda: timedelta(0))
 
     lap_history: List[timedelta] = field(default_factory=list)
+    cancelled_laps: List[Tuple[int, timedelta]] = field(default_factory=list)  # (original_index, timedelta)
     position_history: List[int] = field(default_factory=list)
 
     # (leader, previous)
@@ -73,11 +74,13 @@ class Driver:
         Se race=True, salta il primo giro (outlap). Se non ci sono >=2 giri, esce.
         """
         if not self.lap_history:
+            self.fast_lap = timedelta(0)
             return
 
         if race:
             start_index = 1
-            if self.laps < 2 or len(self.lap_history) < 2:
+            if len(self.lap_history) < 2:
+                self.fast_lap = timedelta(0)
                 return
         else:
             start_index = 0
@@ -157,6 +160,32 @@ class Driver:
 
     def finish(self) -> None:
         self.race_status = RaceState.FINISHED
+
+    # -------------------
+    # Lap cancel / restore
+    # -------------------
+    def cancel_laps(self, indices: List[int], race: bool) -> None:
+        """Sposta i giri agli indici indicati da lap_history a cancelled_laps."""
+        for i in sorted(indices, reverse=True):
+            if 0 <= i < len(self.lap_history):
+                lap_td = self.lap_history.pop(i)
+                self.cancelled_laps.append((i, lap_td))
+                self.laps = max(0, self.laps - 1)
+        self._find_best_lap(race)
+        self.last_lap = self.lap_history[-1] if self.lap_history else timedelta(0)
+
+    def restore_laps(self, cancelled_indices: List[int], race: bool) -> None:
+        """Ripristina i giri dalla lista cancelled_laps indicati per indice."""
+        to_restore = [(ci, self.cancelled_laps[ci]) for ci in cancelled_indices if 0 <= ci < len(self.cancelled_laps)]
+        for _ci, (orig_pos, lap_td) in sorted(to_restore, key=lambda x: x[1][0]):
+            insert_pos = min(orig_pos, len(self.lap_history))
+            self.lap_history.insert(insert_pos, lap_td)
+            self.laps += 1
+        for ci in sorted(cancelled_indices, reverse=True):
+            if 0 <= ci < len(self.cancelled_laps):
+                self.cancelled_laps.pop(ci)
+        self._find_best_lap(race)
+        self.last_lap = self.lap_history[-1] if self.lap_history else timedelta(0)
 
     def set_start_time(self) -> None:
         now = datetime.now()
