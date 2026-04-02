@@ -13,7 +13,6 @@ class RaceManagerWindowRefs:
     sc_time_value: QLabel
     session_value: QLabel
     pit_label: QLabel
-    track_value: QLabel
     ip_label: QLabel
     racelist_box: QComboBox
     session_box: QComboBox
@@ -118,7 +117,6 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     sc_time_val = QLabel("00:00")
     session_val = QLabel("Practice")
     pit_val = QLabel("Pit Closed")
-    track_val = QLabel("—")
 
     gl_info.addWidget(QLabel("Tempo:"), 0, 0)
     gl_info.addWidget(timer_val, 0, 1)
@@ -128,8 +126,6 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     gl_info.addWidget(session_val, 2, 1)
     gl_info.addWidget(QLabel("Pit:"), 3, 0)
     gl_info.addWidget(pit_val, 3, 1)
-    gl_info.addWidget(QLabel("Track:"), 4, 0)
-    gl_info.addWidget(track_val, 4, 1)
 
     # --- DIRECTION CONTROL ---
     gb_dir = QGroupBox("Direction Control")
@@ -299,7 +295,6 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         sc_time_value         = sc_time_val,
         session_value         = session_val,
         pit_label             = pit_val,
-        track_value           = track_val,
         ip_label              = ip_val,
         racelist_box          = racelist_box,
         session_box           = session_box,

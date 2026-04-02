@@ -161,10 +161,10 @@ def create_required_folders(
         if copied_count == 0:
             msg = f"Nessuna risorsa copiata: non trovo '{app_resources_subdir}' in '{app_base}'."
             warnings.append(msg)
-            log(f"[PATHS] {msg}")
+            log(f"[PERCORSI] Nessuna risorsa copiata: cartella '{app_resources_subdir}' non trovata in '{app_base}'", level="WARN")
         else:
             log(
-                f"[PATHS] Resources sincronizzate: {copied_count} elementi da '{src_res}' a '{dst_res}'."
+                f"[PERCORSI] Risorse sincronizzate: {copied_count} elementi da '{src_res}' a '{dst_res}'"
             )
 
     return RootMigrationResult(created_any, migrated, removed_old, warnings)

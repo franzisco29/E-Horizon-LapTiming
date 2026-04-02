@@ -104,6 +104,7 @@ def build_stylesheet() -> str:
         border: 1px solid rgba(255,255,255,0.10);
         border-radius: 10px;
         padding: 6px;
+        font-size: 9pt;
     }
     QToolButton#IconButton:hover {
         border: 1px solid rgba(43,183,255,0.55);
@@ -111,6 +112,15 @@ def build_stylesheet() -> str:
     }
     QToolButton#IconButton:pressed {
         background: rgba(43,183,255,0.16);
+    }
+
+    QToolTip {
+        background: #0D1521;
+        color: rgba(255,255,255,0.92);
+        border: 1px solid rgba(43,183,255,0.50);
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 9pt;
     }
     """
 

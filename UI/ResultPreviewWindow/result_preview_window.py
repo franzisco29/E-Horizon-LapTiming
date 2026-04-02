@@ -190,7 +190,7 @@ class ResultPreviewWindow(QDialog):
 			else:
 				self._fallback_reorder(out)
 		except Exception as e:
-			log(f"[ResultPreview] Delta recalc fallback: {e}")
+			log(f"[RISULTATI] Ricalcolo delta fallback: {e}", level="WARN")
 			self._fallback_reorder(out)
 		finally:
 			rm.session_race_list = original_list

@@ -57,8 +57,9 @@ def shutdown_logger() -> None:
 _ensure_writer_started()
 atexit.register(shutdown_logger)
 
-def log(msg: str) -> None:
-    line = f"{datetime.now().isoformat(timespec='milliseconds')} | {msg}\n"
+def log(msg: str, level: str = "INFO") -> None:
+    lvl = level.upper()[:5].ljust(5)
+    line = f"{datetime.now().isoformat(timespec='milliseconds')} | {lvl} | {msg}\n"
     # console
     print(line, end="", flush=True)
     # file (async buffered)

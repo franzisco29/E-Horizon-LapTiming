@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QMessageBox, QFileDialog
 
 from Modules.config_manager import Settings
@@ -14,6 +14,10 @@ from UI.SettingsWindow.settings_window_ui import SettingsWindowUI
 class SettingsWindow(QDialog):
     def __init__(self, parent, settings: Settings):
         super().__init__(parent)
+        # Imposta font esplicito con pointSize > 0 prima di costruire la UI.
+        # La home usa font-size in px → pointSize()=-1; senza questo Qt stampa
+        # "QFont::setPointSize: Point size <= 0 (-1)" quando applica pt nel stylesheet.
+        self.setFont(QFont("Google Sans", 10))
         self.settings = settings
         self._monitor_initial = int(settings.monitor_out)
         self._path_initial = str(settings.root_path)

@@ -48,7 +48,7 @@ class Device:
         except Exception as ex:
             if self._closing or isinstance(ex, (ConnectionResetError, OSError)):
                 return None
-            log(f"[Device] {self.device_id}: read_line error: {type(ex).__name__}: {ex}")
+            log(f"[DEVICE] {self.device_id}: errore lettura riga — {type(ex).__name__}: {ex}", level="WARN")
             return None
 
     def close(self) -> None:

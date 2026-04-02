@@ -59,7 +59,7 @@ def _play(wav: bytes) -> None:
     try:
         winsound.PlaySound(wav, winsound.SND_MEMORY)
     except Exception as ex:
-        log(f"[sound_utils] PlaySound failed: {ex}")
+        log(f"[SUONO] Riproduzione audio fallita: {ex}", level="WARN")
 
 
 def _play_async(wav: bytes) -> None:
@@ -73,11 +73,11 @@ def _play_async(wav: bytes) -> None:
 
 def beep_do() -> None:
     """DO (C4 ~262 Hz) short beep for each light step S1-S5."""
-    log("[SOUND] beep_do")
+    log("[SUONO] beep_do", level="DEBUG")
     _play_async(_WAV_DO)
 
 
 def beep_lights_out() -> None:
     """SOL (G4 ~392 Hz) 2s tone for manual lights out."""
-    log("[SOUND] beep_lights_out")
+    log("[SUONO] beep_lights_out", level="DEBUG")
     _play_async(_WAV_SOL)

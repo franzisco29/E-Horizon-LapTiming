@@ -61,9 +61,9 @@ class DebugWindow(QDialog):
         # endurance: copia per entry (team + active/reserve)
         self._entries: list[_EnduranceEntry] = []
 
-        log(f"[DebugWindow] __init__ racelist='{self._racelist_name}' "
-            f"drivers={len(self.drivers)} reserve={len(self.reserve_drivers)} "
-            f"endurance_mode={self._endurance_mode} device_manager={type(self.device_manager)}")
+        log(f"[DEBUG_WIN] Avviato: lista='{self._racelist_name}' "
+            f"piloti={len(self.drivers)} riserve={len(self.reserve_drivers)} "
+            f"endurance={self._endurance_mode} device_manager={type(self.device_manager)}")
 
         self.ui = DebugWindowUI(self)
         host = QVBoxLayout(self)
@@ -153,7 +153,7 @@ class DebugWindow(QDialog):
     # UI rows
     # -----------------------
     def create_rows(self) -> None:
-        log("[DebugWindow] create_rows() start")
+        log("[DEBUG_WIN] Creazione righe UI avviata", level="DEBUG")
         self._handlers.clear()
 
         # pulizia UI
@@ -163,7 +163,7 @@ class DebugWindow(QDialog):
             #log(f"[DebugWindow] callback_factory(device={device}, number={number})")
 
             def handler():
-                log(f"[DebugWindow] CLICK -> device={device} number={number}")
+                log(f"[DEBUG_WIN] Click transponder — device={device} numero={number}")
                 self.send_udp_message(device=device, number=number)
 
             self._handlers.append(handler)
@@ -175,7 +175,7 @@ class DebugWindow(QDialog):
             # ----------------
             numbers = [n for n in (self._get_number(d) for d in self.drivers) if n is not None]
             if not numbers:
-                log("[DebugWindow] Normal mode: no numbers -> placeholder")
+                log("[DEBUG_WIN] Nessun pilota disponibile in modalità normale", level="WARN")
                 self.ui.add_row("No drivers in RaceList", -1, lambda *_: (lambda: None))
                 return
 
@@ -190,7 +190,7 @@ class DebugWindow(QDialog):
         # Endurance
         # ----------------
         if not self._entries:
-            log("[DebugWindow] Endurance mode: no entries -> placeholder")
+            log("[DEBUG_WIN] Nessuna entry disponibile in modalità endurance", level="WARN")
             self.ui.add_row("No endurance entries in RaceList", -1, lambda *_: (lambda: None))
             return
 
@@ -228,7 +228,7 @@ class DebugWindow(QDialog):
                 swap_enabled=swap_enabled,
             )
 
-        log("[DebugWindow] create_rows() end (endurance)")
+        log("[DEBUG_WIN] Creazione righe UI completata (endurance)", level="DEBUG")
 
     def _swap_entry(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._entries):
@@ -237,7 +237,7 @@ class DebugWindow(QDialog):
         if e.reserve_driver is None:
             return
         e.active_driver, e.reserve_driver = e.reserve_driver, e.active_driver
-        log(f"[DebugWindow] SWAP idx={idx} team='{e.team_label}' -> active=#{self._get_number(e.active_driver)}")
+        log(f"[DEBUG_WIN] Scambio piloti idx={idx} team='{e.team_label}' → attivo=#{self._get_number(e.active_driver)}")
 
     # -----------------------
     # Utilities
@@ -252,30 +252,30 @@ class DebugWindow(QDialog):
         return f"Driver #{number:02d}"
 
     def send_udp_message(self, *, device: int, number: int) -> None:
-        log(f"[DebugWindow] send_udp_message(device={device}, number={number})")
+        log(f"[DEBUG_WIN] Invio transponder simulato — device={device} numero={number}", level="DEBUG")
 
         if device < 0 or device > 4:
-            log("[DebugWindow] device out of range (0..4) -> ignored")
+            log("[DEBUG_WIN] Device fuori range (0..4) — ignorato", level="WARN")
             return
 
         if number < 0 or number > 99:
-            log("[DebugWindow] number out of range (0..99) -> warning")
+            log("[DEBUG_WIN] Numero fuori range (0..99) — avviso", level="WARN")
             QMessageBox.warning(self, "Debug", "Number must be between 0 and 99.")
             return
 
         try:
             # ✅ ORDINE CORRETTO: simulate_transponder(number, device)
             if hasattr(self.device_manager, "simulate_transponder"):
-                log("[DebugWindow] calling device_manager.simulate_transponder(number, device)")
+                log("[DEBUG_WIN] Chiamata simulate_transponder(numero, device)", level="DEBUG")
                 self.device_manager.simulate_transponder(int(number), int(device))
             elif hasattr(self.device_manager, "SimulateTransponder"):
-                log("[DebugWindow] calling device_manager.SimulateTransponder(number, device)")
+                log("[DEBUG_WIN] Chiamata SimulateTransponder(numero, device)", level="DEBUG")
                 self.device_manager.SimulateTransponder(int(number), int(device))
             else:
                 raise AttributeError("DeviceManager has no simulate_transponder/SimulateTransponder method.")
 
-            log("[DebugWindow] simulate_transponder OK")
+            log("[DEBUG_WIN] Simulazione transponder completata con successo", level="DEBUG")
 
         except Exception as e:
-            log(f"[DebugWindow] simulate_transponder ERROR: {e}")
+            log(f"[DEBUG_WIN] Errore simulazione transponder: {e}", level="ERROR")
             QMessageBox.critical(self, "Debug", f"Unable to simulate transponder:\n{e}")

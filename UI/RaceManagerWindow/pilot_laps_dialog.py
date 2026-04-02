@@ -229,7 +229,7 @@ class PilotLapsDialog(QDialog):
 
         driver_label = f"{self.driver.name} {self.driver.surname} (#{self.driver.race_number})"
         times = [lines[i] for i in range(len(selected_rows))]
-        log(f"[PilotLapsDialog] ANNULLAMENTO giri — pilota={driver_label} | giri: {times}")
+        log(f"[DIALOGO_GIRI] Annullamento giri — pilota={driver_label} | giri: {times}")
 
         self._populate_active()
         self._populate_cancelled()
@@ -262,7 +262,7 @@ class PilotLapsDialog(QDialog):
 
         driver_label = f"{self.driver.name} {self.driver.surname} (#{self.driver.race_number})"
         times = [lines[i] for i in range(len(selected_rows))]
-        log(f"[PilotLapsDialog] RIPRISTINO giri — pilota={driver_label} | giri: {times}")
+        log(f"[DIALOGO_GIRI] Ripristino giri — pilota={driver_label} | giri: {times}")
 
         self._populate_active()
         self._populate_cancelled()

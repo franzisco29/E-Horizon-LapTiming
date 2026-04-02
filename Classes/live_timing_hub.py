@@ -3,10 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import threading
-import time
-import urllib.request
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
@@ -16,6 +13,8 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+
+import ngrok
 
 from Modules.log_utils import log
 from Modules.paths import get_app_base_dir
@@ -33,51 +32,6 @@ EVENT_COLOR_MAP: Dict[str, str] = {
 # Public tunnel settings.
 PUBLIC_TUNNEL_DOMAIN = "alphonso-supersacerdotal-tomboyishly.ngrok-free.dev"
 PUBLIC_TUNNEL_AUTHTOKEN = "3AqYa5ynYWEYmf0T5uQ7mKDO2AN_2bBmFGAcFEkaMfGF7sBRj"
-
-# ngrok local API
-NGROK_LOCAL_API = "http://localhost:4040/api"
-# ngrok cloud API key (attualmente non usata: l'API cloud non supporta
-# la cancellazione di endpoint ephemeral creati dall'agent)
-NGROK_API_KEY = "3BerehywJAuyqPeFtEySYxA0CaZ_aPJkh1ppjedRRiCepeAk"
-
-
-def _ngrok_local_api(path: str, method: str = "GET") -> Optional[Any]:
-    """Chiama l'API locale di ngrok (localhost:4040). Ritorna JSON o None."""
-    try:
-        req = urllib.request.Request(f"{NGROK_LOCAL_API}{path}", method=method)
-        req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            return json.loads(resp.read().decode())
-    except Exception:
-        return None
-
-
-def _ngrok_kill_all_endpoints() -> None:
-    """
-    Chiude tutti gli endpoint ngrok attivi via API locale (localhost:4040).
-    Usa /api/endpoints (nuovo) con fallback su /api/tunnels (deprecato).
-    Nota: l'API cloud può cancellare solo endpoint di tipo 'cloud',
-    non quelli ephemeral creati dall'agent — quindi la pulizia si fa solo in locale.
-    """
-    # Prova prima con il nuovo endpoint /api/endpoints
-    result = _ngrok_local_api("/endpoints")
-    if result:
-        for ep in result.get("endpoints", []):
-            eid = ep.get("id", "")
-            url  = ep.get("public_url", ep.get("url", ""))
-            if eid:
-                _ngrok_local_api(f"/endpoints/{eid}", method="DELETE")
-                log(f"[LiveTiming][ngrok] Endpoint '{url}' chiuso via API locale")
-        return  # se ha funzionato non serve il fallback
-
-    # Fallback: /api/tunnels (deprecato ma ancora supportato)
-    result = _ngrok_local_api("/tunnels")
-    if result:
-        for tunnel in result.get("tunnels", []):
-            name = tunnel.get("name", "")
-            if name:
-                _ngrok_local_api(f"/tunnels/{name}", method="DELETE")
-                log(f"[LiveTiming][ngrok] Tunnel '{name}' chiuso via API locale")
 
 
 @dataclass
@@ -112,9 +66,7 @@ class LiveTimingManager:
     _thread: Optional[threading.Thread] = None
     _loop: Optional[asyncio.AbstractEventLoop] = None
     _ready_evt: threading.Event = field(default_factory=threading.Event)
-    _ngrok_proc: Optional[subprocess.Popen[str]] = None
-    _ngrok_log_thread: Optional[threading.Thread] = None
-    _ngrok_start_time: Optional[float] = None
+    _ngrok_listener: Optional[Any] = None
 
     on_public_online: Optional[Callable[[], None]] = None  # callback per segnalare online
 
@@ -298,7 +250,7 @@ class LiveTimingManager:
             uvicorn.Config(self.app_data, host=self.address, port=self.port, log_level="warning")
         )
         try:
-            log(f"[LiveTiming] DATA+WEB server listening at http://{self.address}:{self.port}")
+            log(f"[LIVE] Server avviato su http://{self.address}:{self.port}")
         except Exception:
             pass
         self.enabled = True
@@ -306,6 +258,11 @@ class LiveTimingManager:
         self._start_public_tunnel()
 
     async def _stop_async(self) -> None:
+        # Disconnetti ngrok prima di fermare uvicorn: evita errori
+        # "error connecting to upstream" causati da richieste in arrivo
+        # mentre il server locale è già spento.
+        self._stop_public_tunnel()
+
         if self._server_data:
             self._server_data.should_exit = True
             task = self._server_task
@@ -314,136 +271,55 @@ class LiveTimingManager:
                     await asyncio.wait_for(task, timeout=5.0)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
-        self._stop_public_tunnel()
 
     # ------------------------------------------------------------------
-    # ngrok tunnel management — semplice e stabile
+    # ngrok tunnel management — Python SDK
     # ------------------------------------------------------------------
 
     def _start_public_tunnel(self) -> None:
         if not self.public_enabled:
             return
 
-        if self._ngrok_proc and self._ngrok_proc.poll() is None:
+        if self._ngrok_listener is not None:
             return
 
-        def ngrok_thread():
-            log("[LiveTiming][ngrok] Pulizia endpoint precedenti...")
-            _ngrok_kill_all_endpoints()
-            time.sleep(1.5)
-            ngrok_config = Path(__file__).resolve().parent.parent / "Tools" / "ngrok" / "ngrok.yml"
-            cmd = ["ngrok", "start", "--all", "--config", str(ngrok_config)]
-            env = os.environ.copy()
-            if PUBLIC_TUNNEL_AUTHTOKEN:
-                env["NGROK_AUTHTOKEN"] = PUBLIC_TUNNEL_AUTHTOKEN
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        def ngrok_thread() -> None:
             try:
-                self._ngrok_start_time = time.time()
-                self._ngrok_proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    env=env,
-                    creationflags=creationflags,
+                listener = ngrok.forward(
+                    f"localhost:{self.port}",
+                    authtoken=PUBLIC_TUNNEL_AUTHTOKEN,
+                    domain=PUBLIC_TUNNEL_DOMAIN,
                 )
-                log(f"[LiveTiming][ngrok] Avviato → https://{PUBLIC_TUNNEL_DOMAIN}")
-                self._ngrok_log_thread = threading.Thread(
-                    target=self._consume_ngrok_logs,
-                    name="LiveTimingNgrokLogThread",
-                    daemon=True,
-                )
-                self._ngrok_log_thread.start()
-                # Fallback: dopo 8 secondi controlla l'API di ngrok se il callback non è ancora stato chiamato
-                threading.Thread(
-                    target=self._ngrok_fallback_check,
-                    name="NgrokFallbackCheckThread",
-                    daemon=True,
-                ).start()
-            except FileNotFoundError:
-                log("[LiveTiming][ngrok] ngrok non trovato. Installalo o disabilita public_enabled.")
+                self._ngrok_listener = listener
+                log(f"[LIVE] Tunnel ngrok attivo → {listener.url()}")
+                if self.on_public_online:
+                    try:
+                        self.on_public_online()
+                    finally:
+                        self.on_public_online = None
             except Exception as ex:
-                log(f"[LiveTiming][ngrok] Errore avvio: {ex}")
+                log(f"[LIVE] Errore avvio tunnel ngrok: {ex}", level="ERROR")
 
         threading.Thread(target=ngrok_thread, name="NgrokStartThread", daemon=True).start()
 
-    def _ngrok_fallback_check(self) -> None:
-        """Fallback: controlla l'API di ngrok dopo 8 sec se il callback non è stato ancora chiamato."""
-        time.sleep(8)
-        if not self.on_public_online:
-            return  # callback già chiamato
-        try:
-            result = _ngrok_local_api("/status")
-            if result and result.get("status") == "online":
-                log("[LiveTiming][ngrok] API online rilevata via fallback")
-                if self.on_public_online:
-                    try:
-                        self.on_public_online()
-                    finally:
-                        self.on_public_online = None
-        except Exception:
-            pass
-
     def _stop_public_tunnel(self) -> None:
-        # 1. Chiudi i tunnel via API (libera l'endpoint lato server ngrok)
-        log("[LiveTiming][ngrok] Chiusura endpoint in corso...")
-        _ngrok_kill_all_endpoints()
-        time.sleep(0.5)
-
-        # 2. Killa il processo locale
-        proc = self._ngrok_proc
-        self._ngrok_proc = None
-        if not proc:
+        listener = self._ngrok_listener
+        self._ngrok_listener = None
+        if listener is None:
             return
+        url = None
         try:
-            proc.terminate()
-            proc.wait(timeout=4)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-
-        log("[LiveTiming][ngrok] ngrok fermato")
-
-    def _ngrok_fallback_check(self) -> None:
-        """Fallback: controlla l'API di ngrok dopo 8 sec se il callback non è stato ancora chiamato."""
-        time.sleep(8)
-        if not self.on_public_online:
-            return  # callback già chiamato
-        try:
-            result = _ngrok_local_api("/status")
-            if result and result.get("status") == "online":
-                log("[LiveTiming][ngrok] API online rilevata via fallback")
-                if self.on_public_online:
-                    try:
-                        self.on_public_online()
-                    finally:
-                        self.on_public_online = None
+            url = listener.url()
         except Exception:
             pass
-
-    def _consume_ngrok_logs(self) -> None:
-        proc = self._ngrok_proc
-        if not proc or not proc.stdout:
-            return
         try:
-            for raw in proc.stdout:
-                line = raw.strip()
-                if not line:
-                    continue
-                log(f"[LiveTiming][ngrok] {line}")
-                # Notifica la UI quando ngrok è online (pattern matching)
-                if ("started tunnel" in line.lower() or "client session established" in line.lower() or "url=https://" in line.lower() or "online" in line.lower()):
-                    if self.on_public_online:
-                        try:
-                            self.on_public_online()
-                        finally:
-                            self.on_public_online = None  # chiama solo una volta
-        except Exception:
-            pass
+            # disconnect() è sincrono; listener.close() è Awaitable e richiederebbe await.
+            # kill() termina completamente la sessione agent (evita retry interni del SDK).
+            ngrok.disconnect(url)
+            ngrok.kill()
+            log("[LIVE] Tunnel ngrok chiuso")
+        except Exception as ex:
+            log(f"[LIVE] Errore chiusura tunnel ngrok: {ex}", level="WARN")
 
     # ------------------------------------------------------------------
     # Public API

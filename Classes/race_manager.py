@@ -509,18 +509,18 @@ class RaceManager:
         stati = []
         for d in self.session_race_list.drivers:
             stati.append(f"{getattr(d, 'name', '')}({getattr(d, 'race_status', '')})")
-        log(f"[RaceManager][all_ended] Stato piloti: {', '.join(stati)}")
+        log(f"[GARA_MGR] Stato piloti: {', '.join(stati)}", level="DEBUG")
 
         for d in self.session_race_list.drivers:
             if d.race_status != RaceState.FINISHED:
                 # VB: se < DNF e != Finished => false
                 if int(d.race_status) < int(RaceState.DNF):
-                    log(f"[RaceManager][all_ended] Pilota NON ended: {getattr(d, 'name', '')} stato={d.race_status}")
+                    log(f"[GARA_MGR] Pilota non concluso: {getattr(d, 'name', '')} stato={d.race_status}", level="DEBUG")
                     return False
                 if d.race_status != RaceState.FINISHED:
-                    log(f"[RaceManager][all_ended] Pilota stato non FINISHED ma >=DNF: {getattr(d, 'name', '')} stato={d.race_status}")
+                    log(f"[GARA_MGR] Pilota non FINISHED ma >=DNF: {getattr(d, 'name', '')} stato={d.race_status}", level="DEBUG")
                     continue
-        log("[RaceManager][all_ended] Tutti i piloti ended")
+        log("[GARA_MGR] Tutti i piloti hanno concluso la gara", level="DEBUG")
         return True
 
     # ============================================================

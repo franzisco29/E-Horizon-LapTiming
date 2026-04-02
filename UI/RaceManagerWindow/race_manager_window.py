@@ -45,6 +45,7 @@ from Modules.enums import RaceState
 from Classes.roadster import Roadster
 from UI.ResultPreviewWindow.result_preview_window import ResultPreviewWindow
 from UI.AnalyticsSetupDialog.analytics_setup_dialog import AnalyticsSetupDialog
+from UI.RaceManagerWindow.pilot_laps_dialog import PilotLapsDialog
 
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 
@@ -318,6 +319,33 @@ class RaceManagerWindow(QWidget):
         r.cl_pit_btn.clicked.connect(self._on_close_pit_clicked)
 
         r.session_box.currentIndexChanged.connect(self._on_session_type_changed)
+        r.lap_table.cellDoubleClicked.connect(self._on_table_double_click)
+
+    def _on_table_double_click(self, row: int, col: int) -> None:
+        if not (self.race_man and self.session_race_list):
+            return
+        drivers = self.session_race_list.drivers
+        if row < 0 or row >= len(drivers):
+            return
+        driver = drivers[row]
+        is_race = bool(self.race_man.race)
+        dlg = PilotLapsDialog(driver, is_race, parent=self)
+        dlg.sig_laps_changed.connect(self._on_pilot_laps_changed)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        self._pilot_laps_dlg = dlg  # mantieni riferimento per evitare GC
+        dlg.show()
+
+    @Slot()
+    def _on_pilot_laps_changed(self) -> None:
+        """Aggiorna la tabella dopo annullamento/ripristino giri dal dialogo pilota."""
+        if not (self.race_man and self.session_race_list):
+            return
+        try:
+            self.race_man._calculate_delta()
+            self.race_man.best_lap_driver = self.race_man._best_lap_find(self.session_race_list.drivers)
+        except Exception as e:
+            log(f"[RaceWindow] _on_pilot_laps_changed recalc error: {e}")
+        self.write_lap_timing(self.session_race_list)
 
     def _setup_yellow_toggle_ui(self) -> None:
         yellow_style = (
@@ -2226,6 +2254,15 @@ class RaceManagerWindow(QWidget):
             self._update_gui_after_pass(rl, idx=idx, best_idx=best_idx, swap=swap, lap_state=int(lap_state))
         except Exception as e:
             log(f"[RaceWindow] _update_gui_after_pass ERROR: {e}")
+
+        # --- aggiorna pilot laps dialog se aperto per questo pilota
+        try:
+            dlg = getattr(self, "_pilot_laps_dlg", None)
+            if dlg is not None and dlg.isVisible():
+                if int(getattr(dlg.driver, "number", -1)) == int(number):
+                    dlg.refresh_laps()
+        except Exception:
+            pass
 
         dt_ms = int((perf_counter() - t0) * 1000)
         log(f"[RaceWindow] HandleTransponderPass took {dt_ms} ms (swap={swap}, idx={idx}, best_idx={best_idx})")

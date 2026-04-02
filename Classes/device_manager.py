@@ -96,14 +96,14 @@ class DeviceManager:
             try:
                 fn(int(number), int(device))
             except Exception as ex:
-                log(f"[SIM] simulate_transponder error: {ex}")
+                log(f"[DEVICE_MGR] Errore simulazione transponder: {ex}", level="ERROR")
 
         # index listeners: (device, number)
         for fn in list(cls._transponder_simulated_index_listeners):
             try:
                 fn(int(device), int(number))
             except Exception as ex:
-                log(f"[SIM] simulate_transponder_index error: {ex}")
+                log(f"[DEVICE_MGR] Errore simulazione transponder (index): {ex}", level="ERROR")
 
     def __init__(
         self,
@@ -151,11 +151,11 @@ class DeviceManager:
         self._accept_timeout_s = None if accept_timeout_s is None else float(accept_timeout_s)
         self._client_socket_timeout_s = None if client_socket_timeout_s is None else float(client_socket_timeout_s)
 
-        self._log("INIT", f"DeviceManager created ip={ip} port={port} conn_type={self.conn_type.name}")
+        self._log("INIT", f"DeviceManager creato — ip={ip} port={port} conn_type={self.conn_type.name}")
         self._log("INIT", f"MAX_DEVICES={self.MAX_DEVICES} DEVICE_NAMES={list(self.DEVICE_NAMES)}")
         self._log("INIT", f"active_flags={self.active_flags}")
         self._log("INIT", f"handshake_delay_s={self._handshake_delay_s}")
-        self._log("INIT", f"accept_timeout_s={self._accept_timeout_s} client_socket_timeout_s={self._client_socket_timeout_s} (None means no timeout)")
+        self._log("INIT", f"accept_timeout_s={self._accept_timeout_s} client_socket_timeout_s={self._client_socket_timeout_s} (None = nessun timeout)")
 
         if self.conn_type == ConnectionTypes.TCP:
             self.start()
@@ -164,24 +164,24 @@ class DeviceManager:
     # Lifecycle
     # -------------------------
     def start(self) -> None:
-        self._log("START", "start() called")
-        self._log("START", f"DeviceManager config: ip={self.ip}, port={self.port}, conn_type={self.conn_type.name}")
+        self._log("START", "start() chiamato")
+        self._log("START", f"Config: ip={self.ip}, port={self.port}, conn_type={self.conn_type.name}")
 
         if self.conn_type == ConnectionTypes.NONE:
-            self._log("START", "ConnectionTypes.NONE -> server not started")
+            self._log("START", "ConnectionTypes.NONE → server non avviato")
             return
 
         if self._is_running:
-            self._log("START", "Already running")
+            self._log("START", "Server già in esecuzione")
             return
 
         try:
             self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-            self._log("START", f"⚠️ IMPORTANT: Server will listen on 0.0.0.0:{self.port} (all interfaces)")
-            self._log("START", f"⚠️ Connect to: {self.ip}:{self.port} from external device")
-            self._log("START", f"Binding 0.0.0.0:{self.port}")
+            self._log("START", f"Server in ascolto su 0.0.0.0:{self.port} (tutte le interfacce)")
+            self._log("START", f"Connetti a: {self.ip}:{self.port} dal dispositivo esterno")
+            self._log("START", f"Binding su 0.0.0.0:{self.port}")
             self._server_sock.bind(("0.0.0.0", self.port))
 
             self._server_sock.listen(20)
@@ -189,7 +189,7 @@ class DeviceManager:
                 self._server_sock.settimeout(self._accept_timeout_s)
 
             self._is_running = True
-            self._log("START", f"Server listening on port {self.port}")
+            self._log("START", f"Server in ascolto sulla porta {self.port}")
 
             self._accept_thread = threading.Thread(
                 target=self._accept_clients_loop,
@@ -197,40 +197,40 @@ class DeviceManager:
                 name="DM-AcceptLoop",
             )
             self._accept_thread.start()
-            self._log("START", "Accept loop thread started")
+            self._log("START", "Thread accept loop avviato")
 
         except Exception as ex:
-            self._log("ERROR", f"start() failed: {ex}")
+            self._log("ERROR", f"start() fallito: {ex}")
 
     def disconnect_all(self) -> None:
-        self._log("STOP", "disconnect_all() called")
+        self._log("STOP", "disconnect_all() chiamato")
 
         self._is_running = False
 
         with self._lock:
-            self._log("STOP", f"Closing {len(self._devices)} device(s)")
+            self._log("STOP", f"Chiusura di {len(self._devices)} dispositivo/i")
             for dev in list(self._devices.values()):
                 try:
-                    self._log("STOP", f"{dev.device_id}: send DSCN")
+                    self._log("STOP", f"{dev.device_id}: invio DSCN")
                     dev.send_line(DeviceCommand.DSCN.value)
                 except Exception as ex:
-                    self._log("STOP", f"{dev.device_id}: DSCN send error: {ex}")
+                    self._log("STOP", f"{dev.device_id}: errore invio DSCN: {ex}")
 
                 try:
                     self._log("STOP", f"{dev.device_id}: close()")
                     dev.close()
                 except Exception as ex:
-                    self._log("STOP", f"{dev.device_id}: close error: {ex}")
+                    self._log("STOP", f"{dev.device_id}: errore chiusura: {ex}")
 
             self._devices.clear()
 
         if self._server_sock is not None:
             try:
-                self._log("STOP", "Closing server socket")
+                self._log("STOP", "Chiusura server socket")
                 self._server_sock.close()
-                self._log("STOP", "Server socket closed")
+                self._log("STOP", "Server socket chiuso")
             except Exception as ex:
-                self._log("STOP", f"Server socket close error: {ex}")
+                self._log("STOP", f"Errore chiusura server socket: {ex}")
             finally:
                 self._server_sock = None
 
@@ -239,20 +239,20 @@ class DeviceManager:
     # -------------------------
     def _accept_clients_loop(self) -> None:
         if self._server_sock is None:
-            self._log("ACCEPT", "Server socket is None -> accept loop exit")
+            self._log("ACCEPT", "Server socket None → uscita accept loop")
             return
 
-        self._log("ACCEPT", "Accept loop started")
+        self._log("ACCEPT", "Accept loop avviato")
 
         while self._is_running:
             client_sock: Optional[socket.socket] = None
             rfile = None
             wfile = None
             try:
-                self._log("ACCEPT", "Waiting for client (accept)...")
+                self._log("ACCEPT", "In attesa di connessioni client (accept)...")
                 client_sock, addr = self._server_sock.accept()
 
-                self._log("ACCEPT", f"Client connected from {addr}")
+                self._log("ACCEPT", f"Client connesso da {addr}")
 
                 # timeout per evitare blocchi su recv/readline
                 if self._client_socket_timeout_s is not None:
@@ -264,34 +264,34 @@ class DeviceManager:
                 # Handshake: invia "C"
                 wfile.write(f"{DeviceCommand.CONN.value}\n")
                 wfile.flush()
-                self._log("HANDSHAKE", f"Sent handshake '{DeviceCommand.CONN.value}'")
+                self._log("HANDSHAKE", f"Handshake inviato '{DeviceCommand.CONN.value}'")
 
                 time.sleep(self._handshake_delay_s)
 
-                self._log("HANDSHAKE", "Reading handshake response (readline)...")
+                self._log("HANDSHAKE", "Lettura risposta handshake (readline)...")
                 response = rfile.readline()
                 response = response.strip() if response else ""
-                self._log("HANDSHAKE", f"Response='{response}'")
+                self._log("HANDSHAKE", f"Risposta='{response}'")
 
                 if not response.startswith(f"{DeviceCommand.CONN.value}:"):
-                    self._log("HANDSHAKE", "Invalid handshake. Closing client.")
+                    self._log("HANDSHAKE", "Handshake non valido. Chiusura client.")
                     try:
                         client_sock.close()
                     except Exception as ex:
-                        self._log("HANDSHAKE", f"Client close error: {ex}")
+                        self._log("HANDSHAKE", f"Errore chiusura client (handshake non valido): {ex}")
                     continue
 
                 payload = response.split(":", 1)[1]
                 device_id, device_ip = self._extract_device_id_and_ip(payload)
-                self._log("HANDSHAKE", f"Parsed payload='{payload}' -> device_id={device_id} ip={device_ip}")
+                self._log("HANDSHAKE", f"Payload='{payload}' → device_id={device_id} ip={device_ip}")
 
                 with self._lock:
                     if device_id in self._devices:
-                        self._log("HANDSHAKE", f"{device_id} already connected -> refuse")
+                        self._log("HANDSHAKE", f"{device_id} già connesso → connessione rifiutata")
                         try:
                             client_sock.close()
                         except Exception as ex:
-                            self._log("HANDSHAKE", f"Client close error: {ex}")
+                            self._log("HANDSHAKE", f"Errore chiusura client (device duplicato): {ex}")
                         continue
 
                     dev = Device(
@@ -303,7 +303,7 @@ class DeviceManager:
                     )
                     self._devices[device_id] = dev
 
-                self._log("ACCEPT", f"Registered device {device_id}")
+                self._log("ACCEPT", f"Dispositivo {device_id} registrato")
 
                 t = threading.Thread(
                     target=self._receive_loop,
@@ -312,7 +312,7 @@ class DeviceManager:
                     name=f"DM-RX-{device_id}",
                 )
                 t.start()
-                self._log("ACCEPT", f"RX thread started for {device_id}")
+                self._log("ACCEPT", f"Thread RX avviato per {device_id}")
 
             except socket.timeout:
                 # if using a timeout, loop again; otherwise this block won't be hit
@@ -321,17 +321,17 @@ class DeviceManager:
             except OSError as ex:
                 server_stopping = not self._is_running or self._server_sock is None
                 if server_stopping:
-                    self._log("ACCEPT", f"OSError while stopping: {ex}")
+                    self._log("ACCEPT", f"OSError durante l'arresto: {ex}")
                     break
 
-                self._log("ACCEPT", f"Client/socket OSError during accept or handshake: {ex}")
+                self._log("ACCEPT", f"OSError client/socket durante accept o handshake: {ex}")
                 self._safe_close_handshake_client(client_sock, rfile, wfile)
                 continue
             except Exception as ex:
-                self._log("ACCEPT", f"Client accept/handshake error: {ex}")
+                self._log("ACCEPT", f"Errore accept/handshake client: {ex}")
                 self._safe_close_handshake_client(client_sock, rfile, wfile)
 
-        self._log("ACCEPT", "Accept loop ended")
+        self._log("ACCEPT", "Accept loop terminato")
 
     def _safe_close_handshake_client(
         self,
@@ -357,21 +357,21 @@ class DeviceManager:
     # Receive loop
     # -------------------------
     def _receive_loop(self, dev: Device) -> None:
-        self._log("RXLOOP", f"Start RX loop for {dev.device_id}")
+        self._log("RXLOOP", f"RX loop avviato per {dev.device_id}")
 
         try:
             while self._is_running:
-                self._log("RXLOOP", f"{dev.device_id}: waiting read_line()")
+                self._log("RXLOOP", f"{dev.device_id}: attesa read_line()")
                 line = dev.read_line()
 
                 if line is None:
-                    self._log("RXLOOP", f"{dev.device_id}: read_line() -> None (disconnect)")
+                    self._log("RXLOOP", f"{dev.device_id}: read_line() → None (disconnessione)")
                     break
 
                 raw = line
                 line = line.strip()
                 if not line:
-                    self._log("RX", f"{dev.device_id}: empty line ignored (raw={raw!r})")
+                    self._log("RX", f"{dev.device_id}: riga vuota ignorata (raw={raw!r})")
                     continue
 
                 self._log("RX", f"{dev.device_id} -> {line}")
@@ -379,14 +379,14 @@ class DeviceManager:
                 if line.startswith("P:"):
                     m = re.match(r"^P:D(\d+)T(\d+)$", line)
                     if not m:
-                        self._log("PARSER", f"{dev.device_id}: invalid P format: '{line}'")
+                        self._log("PARSER", f"{dev.device_id}: formato P non valido: '{line}'")
                         continue
 
                     dev_n = int(m.group(1))
                     transponder = int(m.group(2))
                     device_id = f"D{dev_n}"
 
-                    self._log("PARSER", f"P OK: device_id={device_id} transponder={transponder}")
+                    self._log("PARSER", f"P ricevuto: device_id={device_id} transponder={transponder}")
 
                     # legacy callback: ("D0", 22)
                     if self.on_transponder_received:
@@ -395,22 +395,22 @@ class DeviceManager:
                             self.on_transponder_received(device_id, transponder)
                             #self._log("CALLBACK", "Callback OK")
                         except Exception as ex:
-                            self._log("CALLBACK", f"Callback error: {ex}")
+                            self._log("CALLBACK", f"Errore callback on_transponder_received: {ex}")
 
                     # NEW callback: (0, 22)
                     if self.on_transponder_received_index:
                         try:
-                            self._log("CALLBACK", f"Calling on_transponder_received_index({dev_n}, {transponder})")
+                            self._log("CALLBACK", f"Chiamata on_transponder_received_index({dev_n}, {transponder})")
                             self.on_transponder_received_index(int(dev_n), int(transponder))
-                            self._log("CALLBACK", "Callback index OK")
+                            self._log("CALLBACK", "Callback index eseguito con successo")
                         except Exception as ex:
-                            self._log("CALLBACK", f"Callback index error: {ex}")
+                            self._log("CALLBACK", f"Errore callback on_transponder_received_index: {ex}")
 
                 elif line.startswith("F:"):
                     # Protocollo comandi TCP in formato stringa: F:<CMD>
                     cmd_value = line.split(":", 1)[1].strip().upper()
                     if not cmd_value:
-                        self._log("PARSER", f"{dev.device_id}: invalid F format (empty command): '{line}'")
+                        self._log("PARSER", f"{dev.device_id}: formato F non valido (comando vuoto): '{line}'")
                         continue
 
                     normalized_cmd = self._TCP_COMMAND_ALIASES.get(cmd_value, cmd_value)
@@ -420,22 +420,22 @@ class DeviceManager:
                         or cmd_value in self._SPECIAL_TCP_COMMANDS
                     )
                     if not is_known:
-                        self._log("PARSER", f"{dev.device_id}: unknown F command '{cmd_value}'")
+                        self._log("PARSER", f"{dev.device_id}: comando F sconosciuto '{cmd_value}'")
                         continue
 
-                    self._log("PARSER", f"F OK: device_id={dev.device_id} command={cmd_value} normalized={normalized_cmd}")
+                    self._log("PARSER", f"F ricevuto: device_id={dev.device_id} comando={cmd_value} normalizzato={normalized_cmd}")
 
                     if self.on_command_received:
                         try:
                             self.on_command_received(dev.device_id, cmd_value)
                         except Exception as ex:
-                            self._log("CALLBACK", f"Command callback error: {ex}")
+                            self._log("CALLBACK", f"Errore callback on_command_received: {ex}")
 
                 else:
-                    self._log("RX", f"{dev.device_id}: unhandled frame '{line}'")
+                    self._log("RX", f"{dev.device_id}: frame non gestito '{line}'")
 
         except Exception as ex:
-            self._log("RXLOOP", f"{dev.device_id}: RX loop error: {ex}")
+            self._log("RXLOOP", f"{dev.device_id}: errore RX loop: {ex}")
 
         finally:
             with self._lock:
@@ -444,16 +444,16 @@ class DeviceManager:
             try:
                 dev.close()
             except Exception as ex:
-                self._log("RXLOOP", f"{dev.device_id}: close error: {ex}")
+                self._log("RXLOOP", f"{dev.device_id}: errore chiusura: {ex}")
 
-            self._log("RXLOOP", f"End RX loop for {dev.device_id} (removed={removed})")
+            self._log("RXLOOP", f"RX loop terminato per {dev.device_id} (rimosso={removed})")
 
     # -------------------------
     # Commands
     # -------------------------
     def send_command(self, command: Union[str, DeviceCommand], device_id: Union[str, int]) -> None:
         if self.conn_type == ConnectionTypes.NONE:
-            self._log("TX", f"NONE: command '{command}' not sent")
+            self._log("TX", f"NONE: comando '{command}' non inviato")
             return
 
         cmd_str = command.value if isinstance(command, DeviceCommand) else str(command)
@@ -462,26 +462,26 @@ class DeviceManager:
         with self._lock:
             dev = self._devices.get(dev_key)
             if dev is None:
-                self._log("TX", f"{dev_key} not connected -> cmd '{cmd_str}' not sent")
+                self._log("TX", f"{dev_key} non connesso → '{cmd_str}' non inviato")
                 return
 
             try:
                 dev.send_line(cmd_str)
                 self._log("TX", f"{dev_key} <- '{cmd_str}'")
             except Exception as ex:
-                self._log("TX", f"{device_id}: send error '{cmd_str}': {ex}")
+                self._log("TX", f"Errore invio '{cmd_str}' a {device_id}: {ex}")
 
     def broadcast(self, command: Union[str, DeviceCommand]) -> None:
         cmd_str = command.value if isinstance(command, DeviceCommand) else str(command)
 
         with self._lock:
-            self._log("BROADCAST", f"Sending '{cmd_str}' to {len(self._devices)} device(s)")
+            self._log("BROADCAST", f"Invio '{cmd_str}' a {len(self._devices)} dispositivo/i")
             for dev in list(self._devices.values()):
                 try:
                     dev.send_line(cmd_str)
                     self._log("BROADCAST", f"{dev.device_id} <- '{cmd_str}'")
                 except Exception as ex:
-                    self._log("BROADCAST", f"{dev.device_id}: send error: {ex}")
+                    self._log("BROADCAST", f"Errore invio a {dev.device_id}: {ex}")
 
     # -------------------------
     # Info / Checks (VB port)
@@ -489,13 +489,13 @@ class DeviceManager:
     def check_sectors_devices(self) -> bool:
         ok = len(self.active_flags) > 2 and self.active_flags[1] and self.active_flags[2]
         self.sectors_on = bool(ok)
-        self._log("CHECK", f"check_sectors_devices -> {ok}")
+        self._log("CHECK", f"check_sectors_devices → {ok}")
         return ok
 
     def check_pit_devices(self) -> bool:
         ok = len(self.active_flags) > 4 and self.active_flags[3] and self.active_flags[4]
         self.pit_on = bool(ok)
-        self._log("CHECK", f"check_pit_devices -> {ok}")
+        self._log("CHECK", f"check_pit_devices → {ok}")
         return ok
 
     def all_required_devices_connected(self) -> bool:
@@ -512,7 +512,7 @@ class DeviceManager:
                         break
 
         ok = missing is None
-        self._log("CHECK", f"all_required_devices_connected -> {ok} (missing={missing})")
+        self._log("CHECK", f"all_required_devices_connected → {ok} (mancante={missing})")
         return ok
 
     # -------------------------
@@ -525,25 +525,27 @@ class DeviceManager:
         m2 = re.search(rf"{re.escape(device_id)}IP(\d{{1,3}}(?:\.\d{{1,3}}){{3}})", payload)
         ip = m2.group(1) if m2 else "0"
 
-        self._log("PARSER", f"_extract_device_id_and_ip payload='{payload}' -> ({device_id}, {ip})")
+        self._log("PARSER", f"_extract_device_id_and_ip: payload='{payload}' → ({device_id}, {ip})")
         return device_id, ip
 
     # -------------------------
     # Logging
     # -------------------------
     def _log(self, tag: str, msg: str) -> None:
-        if (not self.debug_log) and tag in {"RXLOOP", "RX", "PARSER", "CALLBACK"}:
+        _DEBUG_TAGS = {"RXLOOP", "RX", "PARSER", "CALLBACK"}
+        if (not self.debug_log) and tag in _DEBUG_TAGS:
             return
 
-        line = f"[{tag}] {msg}"
+        level = "ERROR" if tag == "ERROR" else ("DEBUG" if tag in _DEBUG_TAGS else "INFO")
+        line = f"[DEVICE_MGR] {msg}"
 
         if self.on_log:
             try:
                 self.on_log(line)
             except Exception as ex:
-                log(f"{datetime.now().isoformat(timespec='milliseconds')} | [LOG] on_log callback error: {ex}")
+                log(f"[DEVICE_MGR] Errore callback on_log: {ex}", level="ERROR")
 
-        log(line)
+        log(line, level=level)
     
     def get_device_status_list(self) -> list[str]:
         """

@@ -9,7 +9,7 @@ from Modules.log_utils import log
 from UI.HomeWindow.home_window import HomeWindow 
 
 def main():
-    log("--- Avvio Applicazione ---")
+    log("[MAIN] Avvio applicazione")
     
     # 1. Creazione dell'istanza QApplication
     # sys.argv permette di passare argomenti da riga di comando
@@ -23,9 +23,9 @@ def main():
     try:
         window = HomeWindow()
         window.show()
-        log("HomeWindow visualizzata con successo.")
+        log("[MAIN] Finestra principale visualizzata con successo")
     except Exception as e:
-        log(f"ERRORE CRITICO durante l'avvio: {e}", level="ERROR")
+        log(f"[MAIN] Errore critico durante l'avvio: {e}", level="ERROR")
         sys.exit(1)
 
     # 3. Esecuzione del loop degli eventi
