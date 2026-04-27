@@ -281,7 +281,7 @@ class Driver:
         name = self.name_surname()
 
         # NOTE: keep same formatting as UI table
-        self.time_on_track = self.race_time - self.start_time
+        self.time_on_track = self.sort_time - self.start_time
         interval = self.print_delta(True)
         gap = self.print_delta(False)
 

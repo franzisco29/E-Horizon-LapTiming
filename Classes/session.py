@@ -223,6 +223,7 @@ class Session:
             return "Closed"
         if st == int(PitOpenState.Valid):
             return "Valid"
+        return "Closed"
         
     # ============================================================
     # POINTS (VB getPoints) - opzionale: puoi lasciarlo in RaceManager

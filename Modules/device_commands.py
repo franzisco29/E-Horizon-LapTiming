@@ -18,6 +18,7 @@ class DeviceCommand(str, Enum):
     CMD_BLUE       = "FB"
     CMD_WET        = "FW"
     CMD_CHECKERED  = "FC"
+    CMD_DRY       = "FD"   # Dry (rimuove WET)
 
     # ------------------------------------------------------------
     # GREEN SETTORIALI + SPECIALI
@@ -136,6 +137,7 @@ class DeviceCommand(str, Enum):
     WET_CMD        = CMD_WET            # 'W' nel protocollo 1-char
     WET_RACE_CMD   = CMD_WET
     FAN_CMD        = CMD_WET
+    DRY_CMD        = CMD_DRY
     END_SESSION_CMD    = CMD_CHECKERED
     CHECKERED_FLAG_CMD = CMD_CHECKERED
 

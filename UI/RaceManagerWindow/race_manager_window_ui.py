@@ -391,7 +391,7 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     debug_btn = _btn("Debug")
 
     pre_minutes = QComboBox()
-    pre_minutes.addItems(["1", "2", "3", "5", "10"])
+    pre_minutes.addItems(["1", "2", "3", "5", "10", "15"])
     pre_minutes.setFixedWidth(58)
     pre_btn = _btn("Start Pre-Gara")
 
