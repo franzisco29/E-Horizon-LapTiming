@@ -9,6 +9,7 @@ class DeviceCommand(str, Enum):
     CMD_CONNECT    = "CN"
     CMD_DISCONNECT = "DC"
     CMD_STATUS     = "ST"
+    CMD_CONFIG     = "CF"
 
     # ------------------------------------------------------------
     # BANDIERE BASE

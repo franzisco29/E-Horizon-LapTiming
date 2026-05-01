@@ -23,6 +23,9 @@ class Device:
     _wfile: TextIO = field(repr=False)
 
     last_status_response: datetime = field(default_factory=datetime.now)
+    heartbeat_missed_count: int = 0
+    heartbeat_waiting: bool = False
+    heartbeat_deadline_monotonic: Optional[float] = None
     _write_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _closing: bool = field(default=False, init=False, repr=False)
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import QTimer
 
@@ -52,7 +54,15 @@ class HomeWindow(QWidget):
         self.settings = Settings.load_default()
         load_favicon(root_path=self.settings.root_path)
         self._set_navigation_enabled(True)
+        QTimer.singleShot(0, self._warm_up_secondary_modules)
         log("[HOME] Impostazioni caricate")
+
+    def _warm_up_secondary_modules(self) -> None:
+        try:
+            importlib.import_module("UI.RaceManagerWindow.race_manager_window")
+            log("[HOME] Warm-up RaceManagerWindow completato", level="DEBUG")
+        except Exception as exc:
+            log(f"[HOME] Warm-up RaceManagerWindow fallito: {exc}", level="DEBUG")
 
     def _on_startup_stable(self):
         """Eseguito quando l'interfaccia è visibile e la COM è pronta."""

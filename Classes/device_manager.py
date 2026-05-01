@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import socket
+import struct
 import threading
 import time
 from datetime import datetime
@@ -11,6 +12,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Union
 from Classes.device import Device
 from Modules.device_commands import DeviceCommand
 from Modules.log_utils import log  # logger tuo
+from PySide6.QtCore import QObject, Signal
 
 
 class ConnectionTypes(IntEnum):
@@ -20,7 +22,9 @@ class ConnectionTypes(IntEnum):
     WIFIUDP = 3
 
 
-class DeviceManager:
+class DeviceManager(QObject):
+    # Qt signal emitted when device list changes
+    devicesChanged = Signal()
     class DevicesIDs(IntEnum):
         Central = 0
         S1 = 1
@@ -75,6 +79,10 @@ class DeviceManager:
         "VSC": DeviceCommand.VIRTUAL_SC_CMD.value,
     }
     _SPECIAL_TCP_COMMANDS: set[str] = {"STP"}
+    _HANDSHAKE_RESPONSE_TIMEOUT_S: float = 3.0
+    _HEARTBEAT_INTERVAL_S: float = 5.0
+    _HEARTBEAT_TIMEOUT_S: float = 2.0
+    _HEARTBEAT_MAX_MISSED: int = 3
 
     # Simulazione transponder (legacy: (number, device))
     _transponder_simulated_listeners: List[Callable[[int, int], None]] = []
@@ -117,6 +125,7 @@ class DeviceManager:
         accept_timeout_s: Optional[float] = None,
         client_socket_timeout_s: Optional[float] = None,
     ) -> None:
+        super().__init__()
         self.ip = ip
         self.port = port
         self.conn_type = ConnectionTypes(int(conn_type))
@@ -133,12 +142,15 @@ class DeviceManager:
 
         self.sectors_on: bool = False
         self.pit_on: bool = False
+        self._last_required_devices_connected_state: Optional[tuple[bool, Optional[str]]] = None
 
         self._devices: Dict[str, Device] = {}
         self._lock = threading.RLock()
 
         self._server_sock: Optional[socket.socket] = None
         self._accept_thread: Optional[threading.Thread] = None
+        self._heartbeat_thread: Optional[threading.Thread] = None
+        self._heartbeat_stop_evt: threading.Event = threading.Event()
         self._is_running: bool = False
 
         # callbacks
@@ -146,6 +158,9 @@ class DeviceManager:
         self.on_transponder_received_index: Optional[Callable[[int, int], None]] = None  # NEW
         self.on_command_received: Optional[Callable[[str, str], None]] = None
         self.on_log: Optional[Callable[[str], None]] = None
+        self.on_device_disconnected: Optional[Callable[[str, str], None]] = None
+        # called when device list changes (connect / disconnect / clear)
+        self.on_devices_changed: Optional[Callable[[], None]] = None
 
         self._handshake_delay_s = max(0.0, handshake_delay_ms / 1000.0)
         self._accept_timeout_s = None if accept_timeout_s is None else float(accept_timeout_s)
@@ -155,6 +170,8 @@ class DeviceManager:
         self._log("INIT", f"MAX_DEVICES={self.MAX_DEVICES} DEVICE_NAMES={list(self.DEVICE_NAMES)}")
         self._log("INIT", f"active_flags={self.active_flags}")
         self._log("INIT", f"handshake_delay_s={self._handshake_delay_s}")
+        self._log("INIT", f"handshake_response_timeout_s={self._HANDSHAKE_RESPONSE_TIMEOUT_S}")
+        self._log("INIT", f"heartbeat interval={self._HEARTBEAT_INTERVAL_S}s timeout={self._HEARTBEAT_TIMEOUT_S}s max_missed={self._HEARTBEAT_MAX_MISSED}")
         self._log("INIT", f"accept_timeout_s={self._accept_timeout_s} client_socket_timeout_s={self._client_socket_timeout_s} (None = nessun timeout)")
 
         if self.conn_type == ConnectionTypes.TCP:
@@ -198,6 +215,7 @@ class DeviceManager:
             )
             self._accept_thread.start()
             self._log("START", "Thread accept loop avviato")
+            self._start_heartbeat_loop()
 
         except Exception as ex:
             self._log("ERROR", f"start() fallito: {ex}")
@@ -206,6 +224,7 @@ class DeviceManager:
         self._log("STOP", "disconnect_all() chiamato")
 
         self._is_running = False
+        self._stop_heartbeat_loop()
 
         with self._lock:
             self._log("STOP", f"Chiusura di {len(self._devices)} dispositivo/i")
@@ -223,16 +242,47 @@ class DeviceManager:
                     self._log("STOP", f"{dev.device_id}: errore chiusura: {ex}")
 
             self._devices.clear()
+            if self.on_devices_changed:
+                try:
+                    self.on_devices_changed()
+                except Exception as ex:
+                    self._log("CALLBACK", f"Errore callback on_devices_changed (clear): {ex}")
+            try:
+                self.devicesChanged.emit()
+            except Exception:
+                pass
 
         if self._server_sock is not None:
             try:
                 self._log("STOP", "Chiusura server socket")
-                self._server_sock.close()
-                self._log("STOP", "Server socket chiuso")
+                try:
+                    # SO_LINGER con timeout 0 forza chiusura immediata con RST, evitando TIME_WAIT
+                    self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                except Exception:
+                    pass
+                try:
+                    # Provare a shutdown per sbloccare eventuali accept() in corso
+                    self._server_sock.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+                try:
+                    self._server_sock.close()
+                    self._log("STOP", "Server socket chiuso")
+                except Exception as ex:
+                    self._log("STOP", f"Errore chiusura server socket: {ex}")
+                # Assicuriamoci che il thread di accept termini
+                try:
+                    if self._accept_thread and self._accept_thread.is_alive():
+                        self._log("STOP", "Joining accept thread...")
+                        self._accept_thread.join(timeout=2.0)
+                        self._log("STOP", "Accept thread terminato")
+                except Exception:
+                    pass
             except Exception as ex:
                 self._log("STOP", f"Errore chiusura server socket: {ex}")
             finally:
                 self._server_sock = None
+                self._accept_thread = None
 
     # -------------------------
     # Accept / handshake
@@ -249,7 +299,6 @@ class DeviceManager:
             rfile = None
             wfile = None
             try:
-                self._log("ACCEPT", "In attesa di connessioni client (accept)...")
                 client_sock, addr = self._server_sock.accept()
 
                 self._log("ACCEPT", f"Client connesso da {addr}")
@@ -269,11 +318,17 @@ class DeviceManager:
                 time.sleep(self._handshake_delay_s)
 
                 self._log("HANDSHAKE", "Lettura risposta handshake (readline)...")
+                client_sock.settimeout(self._HANDSHAKE_RESPONSE_TIMEOUT_S)
                 response = rfile.readline()
                 response = response.strip() if response else ""
                 self._log("HANDSHAKE", f"Risposta='{response}'")
 
-                if not response.startswith(f"{DeviceCommand.CONN.value}:"):
+                if self._client_socket_timeout_s is not None:
+                    client_sock.settimeout(self._client_socket_timeout_s)
+                else:
+                    client_sock.settimeout(None)
+
+                if not (response.startswith(f"{DeviceCommand.CONN.value}:") or response.startswith("C:")):
                     self._log("HANDSHAKE", "Handshake non valido. Chiusura client.")
                     try:
                         client_sock.close()
@@ -303,6 +358,17 @@ class DeviceManager:
                     )
                     self._devices[device_id] = dev
 
+                # notify listeners that device list changed (callback + Qt signal)
+                if self.on_devices_changed:
+                    try:
+                        self.on_devices_changed()
+                    except Exception as ex:
+                        self._log("CALLBACK", f"Errore callback on_devices_changed: {ex}")
+                try:
+                    # emit Qt signal (thread-safe delivery to UI thread)
+                    self.devicesChanged.emit()
+                except Exception:
+                    pass
                 self._log("ACCEPT", f"Dispositivo {device_id} registrato")
 
                 t = threading.Thread(
@@ -315,8 +381,13 @@ class DeviceManager:
                 self._log("ACCEPT", f"Thread RX avviato per {device_id}")
 
             except socket.timeout:
-                # if using a timeout, loop again; otherwise this block won't be hit
-                if self._accept_timeout_s is not None:
+                # timeout in accept() when server timeout is enabled
+                if client_sock is None and self._accept_timeout_s is not None:
+                    continue
+                # timeout during handshake response read
+                if client_sock is not None:
+                    self._log("HANDSHAKE", "Timeout risposta handshake. Chiusura client.")
+                    self._safe_close_handshake_client(client_sock, rfile, wfile)
                     continue
             except OSError as ex:
                 server_stopping = not self._is_running or self._server_sock is None
@@ -353,6 +424,97 @@ class DeviceManager:
             except Exception:
                 pass
 
+    def _start_heartbeat_loop(self) -> None:
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return
+
+        self._heartbeat_stop_evt.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            daemon=True,
+            name="DM-HeartbeatLoop",
+        )
+        self._heartbeat_thread.start()
+        self._log("START", "Thread heartbeat loop avviato")
+
+    def _stop_heartbeat_loop(self) -> None:
+        self._heartbeat_stop_evt.set()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=1.5)
+        self._heartbeat_thread = None
+
+    def _heartbeat_loop(self) -> None:
+        self._log("HEARTBEAT", "Heartbeat loop avviato")
+
+        while self._is_running and not self._heartbeat_stop_evt.is_set():
+            if self._heartbeat_stop_evt.wait(self._HEARTBEAT_INTERVAL_S):
+                break
+
+            now = time.monotonic()
+            to_ping: List[Device] = []
+            to_disconnect: List[tuple[str, str]] = []
+
+            with self._lock:
+                for dev_id, dev in list(self._devices.items()):
+                    if dev.heartbeat_waiting and dev.heartbeat_deadline_monotonic is not None and now >= dev.heartbeat_deadline_monotonic:
+                        dev.heartbeat_waiting = False
+                        dev.heartbeat_deadline_monotonic = None
+                        dev.heartbeat_missed_count += 1
+                        self._log(
+                            "HEARTBEAT",
+                            f"{dev_id}: heartbeat mancato ({dev.heartbeat_missed_count}/{self._HEARTBEAT_MAX_MISSED})",
+                        )
+                        if dev.heartbeat_missed_count >= self._HEARTBEAT_MAX_MISSED:
+                            to_disconnect.append((dev_id, "timeout heartbeat (3 mancati consecutivi)"))
+                            continue
+
+                    if not dev.heartbeat_waiting:
+                        dev.heartbeat_waiting = True
+                        dev.heartbeat_deadline_monotonic = now + self._HEARTBEAT_TIMEOUT_S
+                        to_ping.append(dev)
+
+            for dev in to_ping:
+                dev.send_line(DeviceCommand.STATUS_CMD.value)
+                self._log("HEARTBEAT", f"{dev.device_id} <- '{DeviceCommand.STATUS_CMD.value}'")
+
+            for dev_id, reason in to_disconnect:
+                self._disconnect_device(dev_id, reason=reason, emit_alert=True)
+
+        self._log("HEARTBEAT", "Heartbeat loop terminato")
+
+    def _disconnect_device(self, device_id: str, reason: str, emit_alert: bool = False) -> bool:
+        with self._lock:
+            dev = self._devices.pop(device_id, None)
+
+        if dev is None:
+            return False
+
+        try:
+            dev.close()
+        except Exception as ex:
+            self._log("DISCONNECT", f"{device_id}: errore chiusura socket: {ex}")
+
+        self._log("DISCONNECT", f"{device_id}: disconnesso ({reason})")
+
+        if emit_alert and self.on_device_disconnected:
+            try:
+                self.on_device_disconnected(device_id, reason)
+            except Exception as ex:
+                self._log("CALLBACK", f"Errore callback on_device_disconnected: {ex}")
+
+        if self.on_devices_changed:
+            try:
+                self.on_devices_changed()
+            except Exception as ex:
+                self._log("CALLBACK", f"Errore callback on_devices_changed (remove): {ex}")
+
+        try:
+            self.devicesChanged.emit()
+        except Exception as ex:
+            self._log("CALLBACK", f"Errore emitting devicesChanged: {ex}")
+
+        return True
+
     # -------------------------
     # Receive loop
     # -------------------------
@@ -375,6 +537,17 @@ class DeviceManager:
                     continue
 
                 self._log("RX", f"{dev.device_id} -> {line}")
+
+                if line == "S:OK":
+                    with self._lock:
+                        same_dev = self._devices.get(dev.device_id) is dev
+                        if same_dev:
+                            dev.last_status_response = datetime.now()
+                            dev.heartbeat_missed_count = 0
+                            dev.heartbeat_waiting = False
+                            dev.heartbeat_deadline_monotonic = None
+                    self._log("HEARTBEAT", f"{dev.device_id}: heartbeat OK")
+                    continue
 
                 if line.startswith("P:"):
                     m = re.match(r"^P:D(\d+)T(\d+)$", line)
@@ -438,13 +611,7 @@ class DeviceManager:
             self._log("RXLOOP", f"{dev.device_id}: errore RX loop: {ex}")
 
         finally:
-            with self._lock:
-                removed = self._devices.pop(dev.device_id, None) is not None
-
-            try:
-                dev.close()
-            except Exception as ex:
-                self._log("RXLOOP", f"{dev.device_id}: errore chiusura: {ex}")
+            removed = self._disconnect_device(dev.device_id, reason="connessione chiusa", emit_alert=False)
 
             self._log("RXLOOP", f"RX loop terminato per {dev.device_id} (rimosso={removed})")
 
@@ -500,6 +667,9 @@ class DeviceManager:
 
     def all_required_devices_connected(self) -> bool:
         if self.conn_type == ConnectionTypes.NONE:
+            state = (True, None)
+            if self._last_required_devices_connected_state != state:
+                self._last_required_devices_connected_state = state
             return True
 
         missing: Optional[str] = None
@@ -512,7 +682,10 @@ class DeviceManager:
                         break
 
         ok = missing is None
-        self._log("CHECK", f"all_required_devices_connected → {ok} (mancante={missing})")
+        state = (ok, missing)
+        if self._last_required_devices_connected_state != state:
+            self._last_required_devices_connected_state = state
+            self._log("CHECK", f"all_required_devices_connected → {ok} (mancante={missing})")
         return ok
 
     # -------------------------
@@ -532,7 +705,7 @@ class DeviceManager:
     # Logging
     # -------------------------
     def _log(self, tag: str, msg: str) -> None:
-        _DEBUG_TAGS = {"RXLOOP", "RX", "PARSER", "CALLBACK"}
+        _DEBUG_TAGS = {"RXLOOP", "RX", "PARSER", "CALLBACK", "HEARTBEAT"}
         if (not self.debug_log) and tag in _DEBUG_TAGS:
             return
 

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QTableWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +28,8 @@ class RaceManagerWindowRefs:
     session_value: QLabel
     pit_label: QLabel
     ip_label: QLabel
+    device_btn: QToolButton
+    recovery_btn: QPushButton
     racelist_box: QComboBox
     session_box: QComboBox
     load_btn: QPushButton
@@ -442,6 +445,18 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     status_box.addItems(["DNF", "DSQ", "DNS"])
     status_box.setMinimumWidth(88)
 
+    device_btn = QToolButton()
+    device_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    device_btn.setFixedWidth(92)
+    device_btn.setFixedHeight(28)
+    device_btn.setText("Dispositivi ▸")
+    device_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+    device_btn.setToolTip("Clicca per aprire la finestra dispositivi (non bloccante)")
+
+    recovery_btn = _btn("↻  Ripristina", 100)
+    recovery_btn.setToolTip("Ripristina la sessione dall'ultimo checkpoint")
+    recovery_btn.setEnabled(False)
+
     load_btn         = _btn("Carica", 76)
     start_btn = _StartButton()
     start_btn.setCursor(Qt.PointingHandCursor)
@@ -485,6 +500,11 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
     rc_grid.addWidget(apply_status_btn,  2, 2, Qt.AlignVCenter)
     rc_grid.addWidget(save_btn,          2, 4, Qt.AlignVCenter)
     rc_grid.addWidget(analytics_btn,     2, 5, Qt.AlignVCenter)
+
+    # Riga 3: dispositivi connessi / non connessi + recovery
+    rc_grid.addWidget(_key("Disp:"),    3, 0, Qt.AlignVCenter | Qt.AlignRight)
+    rc_grid.addWidget(device_btn,        3, 1, Qt.AlignVCenter)
+    rc_grid.addWidget(recovery_btn,      3, 2, Qt.AlignVCenter)
 
     p_race_lay.setSpacing(0)
     p_race_lay.addStretch(1)
@@ -598,6 +618,8 @@ def build_race_manager_ui(parent: QWidget) -> tuple[QWidget, RaceManagerWindowRe
         pre_race_btn          = pre_btn,
         status_box            = status_box,
         apply_status_btn      = apply_status_btn,
+        device_btn            = device_btn,
+        recovery_btn          = recovery_btn,
         ys1_btn               = btns["YS1"],
         ys2_btn               = btns["YS2"],
         ys3_btn               = btns["YS3"],
