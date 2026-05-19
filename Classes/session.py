@@ -230,6 +230,15 @@ class Session:
     # ============================================================
 
     def get_points(self, pos: int, best: bool):
+        # Defensive: ensure pos is an int and within valid ranges to avoid IndexError
+        try:
+            pos = int(pos)
+        except Exception:
+            return 0
+
+        if pos <= 0:
+            return 0
+
         st = int(self.session_type)
 
         if st == int(SessionTypes.Practice):
@@ -242,16 +251,22 @@ class Session:
             return 3 if pos == 1 else 0
 
         if st == int(SessionTypes.FRace):
-            base = self.feature_points[pos - 1]
-            return base + 1 if best else base
+            if 1 <= pos <= len(self.feature_points):
+                base = self.feature_points[pos - 1]
+                return base + 1 if best else base
+            return 0
 
         if st == int(SessionTypes.SRace):
-            base = self.sprint_points[pos - 1]
-            return base + 1 if best else base
+            if 1 <= pos <= len(self.sprint_points):
+                base = self.sprint_points[pos - 1]
+                return base + 1 if best else base
+            return 0
 
         if st == int(SessionTypes.ERace):
-            base = self.endur_points[pos - 1]
-            return base + 1 if best else base
+            if 1 <= pos <= len(self.endur_points):
+                base = self.endur_points[pos - 1]
+                return base + 1 if best else base
+            return 0
 
         return 0
 

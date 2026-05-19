@@ -1,51 +1,55 @@
-# UI/SettingsWindow/settings_window_ui.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QLineEdit, QCheckBox, QComboBox,
-    QFrame, QScrollArea, QStackedWidget,
+    QCheckBox,
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _divider() -> QFrame:
-    d = QFrame()
-    d.setObjectName("SectionDivider")
-    return d
+    frame = QFrame()
+    frame.setObjectName("SectionDivider")
+    return frame
 
 
 def _field_label(text: str) -> QLabel:
-    lb = QLabel(text)
-    lb.setObjectName("FieldLabel")
-    return lb
+    label = QLabel(text)
+    label.setObjectName("FieldLabel")
+    return label
 
 
 def _hint_label(text: str) -> QLabel:
-    lb = QLabel(text)
-    lb.setObjectName("HintLabel")
-    lb.setWordWrap(True)
-    return lb
+    label = QLabel(text)
+    label.setObjectName("HintLabel")
+    label.setWordWrap(True)
+    return label
 
 
 def _group_title(icon: str, text: str) -> QLabel:
-    lb = QLabel(f"{icon}  {text}")
-    lb.setObjectName("GroupTitle")
-    return lb
+    label = QLabel(f"{icon}  {text}")
+    label.setObjectName("GroupTitle")
+    return label
 
 
 def _nav_btn(icon: str, text: str) -> QPushButton:
-    btn = QPushButton(f"  {icon}  {text}")
-    btn.setObjectName("NavBtn")
-    btn.setCheckable(True)
-    btn.setFixedHeight(44)
-    return btn
+    button = QPushButton(f"  {icon}  {text}")
+    button.setObjectName("NavBtn")
+    button.setCheckable(True)
+    button.setFixedHeight(44)
+    return button
 
 
 @dataclass
@@ -58,13 +62,13 @@ class SettingsWindowUIRefs:
     conn_type_combo: QComboBox
     debounce_edit: QLineEdit
     manual_start_check: QCheckBox
-
+    heartbeat_interval_edit: QLineEdit
+    heartbeat_max_missed_edit: QLineEdit
     live_ip_edit: QLineEdit
     live_port_edit: QLineEdit
     live_public_check: QCheckBox
     live_box: QWidget
     starting_box: QWidget
-
     tcp_box: QWidget
     tcp_ip_value_label: QLabel
     tcp_port_edit: QLineEdit
@@ -73,28 +77,21 @@ class SettingsWindowUIRefs:
     summary_start_value: QLabel
     summary_live_value: QLabel
     summary_profile_value: QLabel
-
     root_path_edit: QLineEdit
     browse_btn: QPushButton
-
     cancel_btn: QPushButton
     save_btn: QPushButton
-
     title_label: QLabel
 
 
 class SettingsWindowUI(QWidget):
-
     _STYLE = """
-        /* ====== Root ====== */
         QWidget#SettingsWindowUI {
             background: #060A10;
             color: #EAF2FF;
             font-family: "Google Sans";
             font-size: 10pt;
         }
-
-        /* ====== Sidebar ====== */
         QWidget#Sidebar {
             background: #0A0F1A;
             border-right: 1px solid #131D2B;
@@ -146,29 +143,13 @@ class SettingsWindowUI(QWidget):
             font-weight: 700;
             border-left: 3px solid #00A6FF;
         }
-
-        /* ====== Content area ====== */
         QWidget#ContentArea { background: #060A10; }
-        QScrollArea {
-            border: none;
-            background: transparent;
-        }
+        QScrollArea { border: none; background: transparent; }
         QScrollArea > QWidget > QWidget { background: transparent; }
-
-        /* ====== Cards ====== */
         QFrame#Card {
             background: #0B1120;
             border: 1px solid #131F32;
             border-radius: 18px;
-        }
-        QFrame#Card:disabled {
-            background: #080D18;
-            border: 1px solid #0E1820;
-        }
-        QFrame#InnerCard {
-            background: #08111E;
-            border: 1px solid #10192A;
-            border-radius: 12px;
         }
         QFrame#SectionDivider {
             background: #10192A;
@@ -176,14 +157,11 @@ class SettingsWindowUI(QWidget):
             max-height: 1px;
             border: none;
         }
-
-        /* ====== Typography ====== */
         QLabel { background: transparent; }
         QLabel#PageTitle {
             font-size: 17pt;
             font-weight: 700;
             color: #D0E8FF;
-            letter-spacing: 0.3px;
         }
         QLabel#PageSubtitle {
             font-size: 9pt;
@@ -207,15 +185,7 @@ class SettingsWindowUI(QWidget):
             color: #4A6878;
             font-size: 8.5pt;
         }
-        QLabel#SummarySection {
-            font-size: 7pt;
-            font-weight: 700;
-            color: #3D607E;
-            letter-spacing: 1.2px;
-        }
-
-        /* ====== Inputs ====== */
-        QLineEdit {
+        QLineEdit, QComboBox {
             height: 40px;
             border-radius: 12px;
             padding: 0 14px;
@@ -224,38 +194,7 @@ class SettingsWindowUI(QWidget):
             color: #C8E0F8;
             font-size: 10pt;
         }
-        QLineEdit:focus {
-            border: 1px solid #00A6FF;
-            background: #080F1C;
-        }
-        QLineEdit:disabled {
-            background: #060B14;
-            border: 1px solid #0C1520;
-            color: rgba(200,224,248,0.22);
-        }
-        QComboBox {
-            height: 40px;
-            border-radius: 12px;
-            padding: 0 12px;
-            background: #070E1A;
-            border: 1px solid #131F32;
-            color: #C8E0F8;
-            font-size: 10pt;
-        }
-        QComboBox:focus { border: 1px solid #00A6FF; }
-        QComboBox::drop-down { border: none; width: 28px; }
-        QComboBox QAbstractItemView {
-            background: #070E1A;
-            border: 1px solid #131F32;
-            selection-background-color: #0D1C30;
-            color: #C8E0F8;
-            outline: none;
-        }
-        QComboBox:disabled {
-            background: #060B14;
-            border: 1px solid #0C1520;
-            color: rgba(200,224,248,0.22);
-        }
+        QLineEdit:focus, QComboBox:focus { border: 1px solid #00A6FF; }
         QCheckBox {
             spacing: 10px;
             color: #A8C8E8;
@@ -278,13 +217,6 @@ class SettingsWindowUI(QWidget):
             background: #00A6FF;
             border: 1px solid #00A6FF;
         }
-        QCheckBox:disabled { color: rgba(168,200,232,0.22); }
-        QCheckBox::indicator:disabled {
-            background: #060B14;
-            border: 1px solid #0C1520;
-        }
-
-        /* ====== Buttons ====== */
         QPushButton {
             border-radius: 12px;
             padding: 10px 18px;
@@ -305,13 +237,6 @@ class SettingsWindowUI(QWidget):
             font-weight: 700;
         }
         QPushButton#Primary:hover { background: rgba(0,166,255,0.20); }
-        QPushButton:disabled {
-            background: #07101A;
-            border: 1px solid #0E1820;
-            color: rgba(112,144,176,0.22);
-        }
-
-        /* ====== Bottom bar ====== */
         QWidget#BottomBar {
             background: #07101A;
             border-top: 1px solid #101E30;
@@ -321,16 +246,14 @@ class SettingsWindowUI(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("SettingsWindowUI")
-        self.setWindowTitle("E-Horizon \u2022 Impostazioni")
+        self.setWindowTitle("E-Horizon • Impostazioni")
         self.setMinimumSize(980, 640)
         self.setStyleSheet(self._STYLE)
 
-        # ===== Root layout: sidebar | content =====
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Sidebar ──────────────────────────────────────────────────────────
         sidebar = QWidget(self)
         sidebar.setObjectName("Sidebar")
         sidebar.setFixedWidth(224)
@@ -358,14 +281,14 @@ class SettingsWindowUI(QWidget):
         sb.addSpacing(8)
 
         self._nav_btns: list[QPushButton] = []
-        _nav_items = [
-            ("\u2699",   "Generale"),
-            ("\U0001f4e1", "Comunicazione"),
-            ("\U0001f50c", "Dispositivi"),
-            ("\U0001f4fa", "Live Timing"),
-            ("\U0001f4c1", "Cartelle"),
-        ]
-        for icon, label in _nav_items:
+        for icon, label in [
+            ("⚙", "Generale"),
+            ("📡", "Comunicazione"),
+            ("⏱", "Heartbeat"),
+            ("🔌", "Dispositivi"),
+            ("📺", "Live Timing"),
+            ("📁", "Cartelle"),
+        ]:
             btn = _nav_btn(icon, label)
             self._nav_btns.append(btn)
             sb.addWidget(btn)
@@ -373,69 +296,67 @@ class SettingsWindowUI(QWidget):
 
         sb.addStretch(1)
 
-        # Summary mini-card at the bottom of the sidebar
-        sum_frame = QFrame()
-        sum_frame.setObjectName("InnerCard")
-        sf = QGridLayout(sum_frame)
-        sf.setContentsMargins(12, 12, 12, 12)
-        sf.setHorizontalSpacing(8)
-        sf.setVerticalSpacing(8)
-        sf.setColumnStretch(1, 1)
-        sf.setColumnMinimumWidth(0, 70)
+        summary_box = QFrame()
+        summary_box.setObjectName("Card")
+        summary_layout = QGridLayout(summary_box)
+        summary_layout.setContentsMargins(12, 12, 12, 12)
+        summary_layout.setHorizontalSpacing(8)
+        summary_layout.setVerticalSpacing(8)
+        summary_layout.setColumnStretch(1, 1)
+        summary_layout.setColumnMinimumWidth(0, 70)
 
-        sf_title = QLabel("STATO RAPIDO")
-        sf_title.setObjectName("SummarySection")
-        sf.addWidget(sf_title, 0, 0, 1, 2)
+        summary_title = QLabel("STATO RAPIDO")
+        summary_title.setObjectName("GroupTitle")
+        summary_layout.addWidget(summary_title, 0, 0, 1, 2)
 
-        summary_conn_value    = QLabel("-")
-        summary_start_value   = QLabel("-")
-        summary_live_value    = QLabel("-")
+        summary_conn_value = QLabel("-")
+        summary_start_value = QLabel("-")
+        summary_live_value = QLabel("-")
         summary_profile_value = QLabel("-")
 
-        for idx, (txt, val) in enumerate([
-            ("Connessione", summary_conn_value),
-            ("Start",       summary_start_value),
-            ("Live",        summary_live_value),
-            ("Profilo",     summary_profile_value),
-        ], start=1):
-            fl = _field_label(txt)
-            fl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            val.setObjectName("FieldValue")
-            val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            sf.addWidget(fl,  idx, 0)
-            sf.addWidget(val, idx, 1)
+        for row, (label_text, value_widget) in enumerate(
+            [
+                ("Connessione", summary_conn_value),
+                ("Start", summary_start_value),
+                ("Live", summary_live_value),
+                ("Profilo", summary_profile_value),
+            ],
+            start=1,
+        ):
+            label = _field_label(label_text)
+            value_widget.setObjectName("FieldValue")
+            summary_layout.addWidget(label, row, 0)
+            summary_layout.addWidget(value_widget, row, 1)
 
-        sb.addWidget(sum_frame)
+        sb.addWidget(summary_box)
         root.addWidget(sidebar)
-
-        # ── Right side: scrollable pages + bottom bar ─────────────────────────
-        right_vbox = QVBoxLayout()
-        right_vbox.setContentsMargins(0, 0, 0, 0)
-        right_vbox.setSpacing(0)
 
         content_host = QWidget(self)
         content_host.setObjectName("ContentArea")
+        content_layout = QVBoxLayout(content_host)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(content_host)
 
-        ch_vbox = QVBoxLayout(content_host)
-        ch_vbox.setContentsMargins(0, 0, 0, 0)
-        ch_vbox.setSpacing(0)
-
         self._stack = QStackedWidget(content_host)
-        ch_vbox.addWidget(self._stack)
-        right_vbox.addWidget(scroll, 1)
+        content_layout.addWidget(self._stack)
 
-        # Bottom bar
+        right_column = QVBoxLayout()
+        right_column.setContentsMargins(0, 0, 0, 0)
+        right_column.setSpacing(0)
+        right_column.addWidget(scroll, 1)
+
         bottom_bar = QWidget(self)
         bottom_bar.setObjectName("BottomBar")
         bottom_bar.setFixedHeight(62)
-        bb = QHBoxLayout(bottom_bar)
-        bb.setContentsMargins(28, 0, 28, 0)
-        bb.setSpacing(12)
-        bb.addStretch(1)
+        bottom_layout = QHBoxLayout(bottom_bar)
+        bottom_layout.setContentsMargins(28, 0, 28, 0)
+        bottom_layout.setSpacing(12)
+        bottom_layout.addStretch(1)
 
         cancel_btn = QPushButton("Annulla")
         cancel_btn.setMinimumWidth(120)
@@ -446,28 +367,39 @@ class SettingsWindowUI(QWidget):
         save_btn.setFixedHeight(40)
         save_btn.setMinimumWidth(190)
 
-        bb.addWidget(cancel_btn)
-        bb.addWidget(save_btn)
-        right_vbox.addWidget(bottom_bar)
+        bottom_layout.addWidget(cancel_btn)
+        bottom_layout.addWidget(save_btn)
+        right_column.addWidget(bottom_bar)
 
         right_widget = QWidget(self)
-        right_widget.setLayout(right_vbox)
+        right_widget.setLayout(right_column)
         root.addWidget(right_widget, 1)
 
-        # ── Build pages ───────────────────────────────────────────────────────
         (
-            monitor_combo, debug_check, live_check, tv_check,
+            monitor_combo,
+            debug_check,
+            live_check,
+            tv_check,
             manual_start_check,
-            conn_type_combo, debounce_edit,
-            tcp_ip_value_label, tcp_port_edit, tcp_card,
+            conn_type_combo,
+            debounce_edit,
+            heartbeat_interval_edit,
+            heartbeat_max_missed_edit,
+            tcp_ip_value_label,
+            tcp_port_edit,
+            tcp_card,
             dev_checks,
-            live_ip_edit, live_port_edit, live_public_check, live_box,
-            root_path_edit, browse_btn,
+            live_ip_edit,
+            live_port_edit,
+            live_public_check,
+            live_box,
+            root_path_edit,
+            browse_btn,
             starting_box,
         ) = self._build_pages()
 
-        for i, btn in enumerate(self._nav_btns):
-            btn.clicked.connect(lambda _chk, idx=i: self._go_to_page(idx))
+        for index, button in enumerate(self._nav_btns):
+            button.clicked.connect(lambda checked=False, idx=index: self._go_to_page(idx))
         self._nav_btns[0].setChecked(True)
 
         self.refs = SettingsWindowUIRefs(
@@ -479,6 +411,8 @@ class SettingsWindowUI(QWidget):
             conn_type_combo=conn_type_combo,
             debounce_edit=debounce_edit,
             manual_start_check=manual_start_check,
+            heartbeat_interval_edit=heartbeat_interval_edit,
+            heartbeat_max_missed_edit=heartbeat_max_missed_edit,
             live_ip_edit=live_ip_edit,
             live_port_edit=live_port_edit,
             live_public_check=live_public_check,
@@ -499,18 +433,10 @@ class SettingsWindowUI(QWidget):
             title_label=title_label,
         )
 
-    # -------------------------------------------------------------------------
-    # Navigation
-    # -------------------------------------------------------------------------
-
     def _go_to_page(self, index: int) -> None:
         self._stack.setCurrentIndex(index)
-        for i, btn in enumerate(self._nav_btns):
-            btn.setChecked(i == index)
-
-    # -------------------------------------------------------------------------
-    # Page factory helpers
-    # -------------------------------------------------------------------------
+        for btn_index, button in enumerate(self._nav_btns):
+            button.setChecked(btn_index == index)
 
     def _make_page(self, title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
         page = QWidget()
@@ -518,253 +444,221 @@ class SettingsWindowUI(QWidget):
         vbox = QVBoxLayout(page)
         vbox.setContentsMargins(32, 28, 32, 32)
         vbox.setSpacing(18)
-        title_lbl = QLabel(title)
-        title_lbl.setObjectName("PageTitle")
-        sub_lbl = QLabel(subtitle)
-        sub_lbl.setObjectName("PageSubtitle")
-        vbox.addWidget(title_lbl)
-        vbox.addWidget(sub_lbl)
+        title_label = QLabel(title)
+        title_label.setObjectName("PageTitle")
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("PageSubtitle")
+        vbox.addWidget(title_label)
+        vbox.addWidget(subtitle_label)
         vbox.addWidget(_divider())
         return page, vbox
 
     def _card(self) -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
         card.setObjectName("Card")
-        inner = QVBoxLayout(card)
-        inner.setContentsMargins(22, 18, 22, 20)
-        inner.setSpacing(14)
-        return card, inner
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(22, 18, 22, 20)
+        layout.setSpacing(14)
+        return card, layout
 
-    def _field_row(self, layout: QGridLayout, row: int,
-                   label: str, widget: QWidget, hint: str = "") -> None:
-        lbl = _field_label(label)
-        lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        layout.addWidget(lbl, row, 0)
+    def _field_row(self, layout: QGridLayout, row: int, label_text: str, widget: QWidget, hint: str = "") -> None:
+        label = _field_label(label_text)
+        layout.addWidget(label, row, 0)
         layout.addWidget(widget, row, 1)
         if hint:
             layout.addWidget(_hint_label(hint), row + 1, 0, 1, 2)
 
-    # -------------------------------------------------------------------------
-    # Page 0 — Generale
-    # -------------------------------------------------------------------------
-
     def _build_page_generale(self):
-        page, vbox = self._make_page(
-            "Generale",
-            "Monitor di output, modalit\u00e0 debug e comportamento della gara"
-        )
+        page, vbox = self._make_page("Generale", "Monitor di output, modalità debug e comportamento della gara")
 
-        card_disp, inner_disp = self._card()
-        inner_disp.addWidget(_group_title("\U0001f5a5", "Display"))
-        inner_disp.addWidget(_divider())
-        g = QGridLayout()
-        g.setHorizontalSpacing(20)
-        g.setVerticalSpacing(14)
-        g.setColumnMinimumWidth(0, 190)
-        g.setColumnStretch(1, 1)
+        display_card, display_layout = self._card()
+        display_layout.addWidget(_group_title("🖥", "Display"))
+        display_layout.addWidget(_divider())
+        display_grid = QGridLayout()
+        display_grid.setHorizontalSpacing(20)
+        display_grid.setVerticalSpacing(14)
+        display_grid.setColumnMinimumWidth(0, 190)
+        display_grid.setColumnStretch(1, 1)
         monitor_combo = QComboBox()
-        self._field_row(g, 0, "Monitor di output", monitor_combo,
-                        "Seleziona lo schermo su cui mostrare la finestra di gara.")
-        inner_disp.addLayout(g)
-        vbox.addWidget(card_disp)
+        self._field_row(display_grid, 0, "Monitor di output", monitor_combo, "Seleziona lo schermo su cui mostrare la finestra di gara.")
+        display_layout.addLayout(display_grid)
+        vbox.addWidget(display_card)
 
-        card_mode, inner_mode = self._card()
-        inner_mode.addWidget(_group_title("\U0001f527", "Modalit\u00e0 operative"))
-        inner_mode.addWidget(_divider())
-        debug_check = QCheckBox("Abilita modalit\u00e0 Debug")
-        debug_check.setToolTip("Mostra informazioni aggiuntive nei log e nella UI.")
-        inner_mode.addWidget(debug_check)
+        mode_card, mode_layout = self._card()
+        mode_layout.addWidget(_group_title("🔧", "Modalità operative"))
+        mode_layout.addWidget(_divider())
+        debug_check = QCheckBox("Abilita modalità Debug")
+        mode_layout.addWidget(debug_check)
         manual_start_check = QCheckBox("Start manuale gara")
-        manual_start_check.setToolTip("Abilita la sequenza manuale di start (START_PROC).")
-        inner_mode.addWidget(manual_start_check)
-        inner_mode.addWidget(_hint_label(
-            "Se disabilitato, lo start avviene automaticamente senza "
-            "intervento dell\u2019operatore."
-        ))
-        vbox.addWidget(card_mode)
+        mode_layout.addWidget(manual_start_check)
+        mode_layout.addWidget(_hint_label("Se disabilitato, lo start avviene automaticamente senza intervento dell’operatore."))
+        vbox.addWidget(mode_card)
         vbox.addStretch(1)
         self._stack.addWidget(page)
         return monitor_combo, debug_check, manual_start_check
 
-    # -------------------------------------------------------------------------
-    # Page 1 — Comunicazione
-    # -------------------------------------------------------------------------
-
     def _build_page_comunicazione(self):
-        page, vbox = self._make_page(
-            "Comunicazione",
-            "Protocollo di rete e parametri della connessione TCP"
-        )
+        page, vbox = self._make_page("Comunicazione", "Protocollo di rete e parametri della connessione TCP")
 
-        card_prot, inner_prot = self._card()
-        inner_prot.addWidget(_group_title("\U0001f4e1", "Protocollo"))
-        inner_prot.addWidget(_divider())
-        g = QGridLayout()
-        g.setHorizontalSpacing(20)
-        g.setVerticalSpacing(14)
-        g.setColumnMinimumWidth(0, 190)
-        g.setColumnStretch(1, 1)
+        protocol_card, protocol_layout = self._card()
+        protocol_layout.addWidget(_group_title("📡", "Protocollo"))
+        protocol_layout.addWidget(_divider())
+        protocol_grid = QGridLayout()
+        protocol_grid.setHorizontalSpacing(20)
+        protocol_grid.setVerticalSpacing(14)
+        protocol_grid.setColumnMinimumWidth(0, 190)
+        protocol_grid.setColumnStretch(1, 1)
         conn_type_combo = QComboBox()
-        conn_type_combo.addItems(["NONE \u2013 Nessuna connessione", "TCP", "SERIAL", "WiFi UDP"])
-        self._field_row(g, 0, "Tipo di comunicazione", conn_type_combo)
+        conn_type_combo.addItems(["NONE – Nessuna connessione", "TCP", "LAPMONITOR", "SERIAL"])
+        self._field_row(protocol_grid, 0, "Tipo di comunicazione", conn_type_combo)
         debounce_edit = QLineEdit()
         debounce_edit.setPlaceholderText("es. 3000")
-        self._field_row(g, 1, "DeBounce Time (ms)", debounce_edit,
-                        "Tempo minimo tra due passaggi sullo stesso rilevatore.")
-        inner_prot.addLayout(g)
-        vbox.addWidget(card_prot)
+        self._field_row(protocol_grid, 1, "DeBounce Time (ms)", debounce_edit, "Tempo minimo tra due passaggi sullo stesso rilevatore.")
+        protocol_layout.addLayout(protocol_grid)
+        vbox.addWidget(protocol_card)
 
         tcp_card = QFrame()
         tcp_card.setObjectName("Card")
-        tc = QVBoxLayout(tcp_card)
-        tc.setContentsMargins(22, 18, 22, 20)
-        tc.setSpacing(14)
-        tc.addWidget(_group_title("\U0001f517", "TCP Connection"))
-        tc.addWidget(_divider())
-        tg = QGridLayout()
-        tg.setHorizontalSpacing(20)
-        tg.setVerticalSpacing(14)
-        tg.setColumnMinimumWidth(0, 190)
-        tg.setColumnStretch(1, 1)
+        tcp_layout = QVBoxLayout(tcp_card)
+        tcp_layout.setContentsMargins(22, 18, 22, 20)
+        tcp_layout.setSpacing(14)
+        tcp_layout.addWidget(_group_title("🔗", "TCP Connection"))
+        tcp_layout.addWidget(_divider())
+        tcp_grid = QGridLayout()
+        tcp_grid.setHorizontalSpacing(20)
+        tcp_grid.setVerticalSpacing(14)
+        tcp_grid.setColumnMinimumWidth(0, 190)
+        tcp_grid.setColumnStretch(1, 1)
         tcp_ip_value_label = QLabel("-")
         tcp_ip_value_label.setObjectName("FieldValue")
-        self._field_row(tg, 0, "IP locale applicazione", tcp_ip_value_label)
+        self._field_row(tcp_grid, 0, "IP locale applicazione", tcp_ip_value_label)
         tcp_port_edit = QLineEdit()
         tcp_port_edit.setPlaceholderText("es. 20777")
-        self._field_row(tg, 1, "Porta TCP", tcp_port_edit)
-        tc.addLayout(tg)
+        self._field_row(tcp_grid, 1, "Porta TCP", tcp_port_edit)
+        tcp_layout.addLayout(tcp_grid)
         vbox.addWidget(tcp_card)
         vbox.addStretch(1)
         self._stack.addWidget(page)
         return conn_type_combo, debounce_edit, tcp_ip_value_label, tcp_port_edit, tcp_card
 
-    # -------------------------------------------------------------------------
-    # Page 2 — Dispositivi
-    # -------------------------------------------------------------------------
+    def _build_page_heartbeat(self):
+        page, vbox = self._make_page("Heartbeat", "Parametri di keep-alive tra server e device TCP")
+
+        card, layout = self._card()
+        layout.addWidget(_group_title("⏱", "Controllo connessione"))
+        layout.addWidget(_divider())
+        layout.addWidget(_hint_label("Il server invia ST a intervalli regolari. Se un device non risponde S:OK per più cicli consecutivi, viene scollegato e lo slot viene liberato."))
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(20)
+        grid.setVerticalSpacing(14)
+        grid.setColumnMinimumWidth(0, 190)
+        grid.setColumnStretch(1, 1)
+
+        heartbeat_interval_edit = QLineEdit()
+        heartbeat_interval_edit.setPlaceholderText("es. 5")
+        self._field_row(grid, 0, "Intervallo heartbeat (s)", heartbeat_interval_edit, "Ogni quanti secondi inviare ST a tutti i device connessi.")
+
+        heartbeat_max_missed_edit = QLineEdit()
+        heartbeat_max_missed_edit.setPlaceholderText("es. 3")
+        self._field_row(grid, 2, "Heartbeat mancati massimi", heartbeat_max_missed_edit, "Numero massimo di heartbeat mancati prima di considerare il device disconnesso.")
+
+        layout.addLayout(grid)
+        vbox.addWidget(card)
+        vbox.addStretch(1)
+        self._stack.addWidget(page)
+        return heartbeat_interval_edit, heartbeat_max_missed_edit
 
     def _build_page_dispositivi(self):
-        page, vbox = self._make_page(
-            "Dispositivi",
-            "Abilita i rilevatori fisicamente presenti nel circuito"
-        )
+        page, vbox = self._make_page("Dispositivi", "Abilita i rilevatori fisicamente presenti nel circuito")
 
-        card, inner = self._card()
-        inner.addWidget(_group_title("\U0001f50c", "Rilevatori attivi"))
-        inner.addWidget(_divider())
-        inner.addWidget(_hint_label(
-            "Seleziona i dispositivi fisicamente collegati. "
-            "La Centrale \u00e8 sempre necessaria per l\u2019avvio della sessione."
-        ))
+        card, layout = self._card()
+        layout.addWidget(_group_title("🔌", "Rilevatori attivi"))
+        layout.addWidget(_divider())
+        layout.addWidget(_hint_label("Seleziona i dispositivi fisicamente collegati. La Centrale è sempre necessaria per l’avvio della sessione."))
 
         names_desc = [
-            ("Centrale",  "Dispositivo master \u2013 obbligatorio"),
+            ("Centrale", "Dispositivo master – obbligatorio"),
             ("Settore 1", "Rilevatore intermedio settore 1"),
             ("Settore 2", "Rilevatore intermedio settore 2"),
-            ("Pit In",    "Ingresso corsia box"),
-            ("Pit Out",   "Uscita corsia box"),
-            ("Semaforo",  "Pannello semaforico di partenza"),
+            ("Pit In", "Ingresso corsia box"),
+            ("Pit Out", "Uscita corsia box"),
+            ("Semaforo", "Pannello semaforico di partenza"),
         ]
         dev_checks: list[QCheckBox] = []
-        dg = QGridLayout()
-        dg.setHorizontalSpacing(24)
-        dg.setVerticalSpacing(4)
-
-        for i, (name, desc) in enumerate(names_desc):
-            cb = QCheckBox(name)
-            cb.setToolTip(desc)
-            dev_checks.append(cb)
-            row, col = divmod(i, 2)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(10)
+        for index, (name, desc) in enumerate(names_desc):
+            checkbox = QCheckBox(name)
+            checkbox.setToolTip(desc)
+            dev_checks.append(checkbox)
+            row, col = divmod(index, 2)
             cell = QVBoxLayout()
             cell.setSpacing(0)
-            cell.addWidget(cb)
+            cell.addWidget(checkbox)
             cell.addWidget(_hint_label(desc))
-            dg.addLayout(cell, row, col)
+            grid.addLayout(cell, row, col)
 
-        inner.addLayout(dg)
+        layout.addLayout(grid)
         vbox.addWidget(card)
         vbox.addStretch(1)
         self._stack.addWidget(page)
         return dev_checks
 
-    # -------------------------------------------------------------------------
-    # Page 3 — Live Timing
-    # -------------------------------------------------------------------------
-
     def _build_page_live(self):
-        page, vbox = self._make_page(
-            "Live Timing",
-            "Configurazione del server live e trasmissione dati in tempo reale"
-        )
+        page, vbox = self._make_page("Live Timing", "Configurazione del server live e trasmissione dati in tempo reale")
 
-        card_en, inner_en = self._card()
-        inner_en.addWidget(_group_title("\U0001f4fa", "Attivazione"))
-        inner_en.addWidget(_divider())
+        activation_card, activation_layout = self._card()
+        activation_layout.addWidget(_group_title("📺", "Attivazione"))
+        activation_layout.addWidget(_divider())
         live_check = QCheckBox("Attiva Live Timing")
-        live_check.setToolTip("Abilita la trasmissione dati live verso i client browser.")
-        inner_en.addWidget(live_check)
+        activation_layout.addWidget(live_check)
         tv_check = QCheckBox("Attiva Tv Tower (non disponibile)")
-        tv_check.setToolTip("Opzione non disponibile in questa versione.")
-        inner_en.addWidget(tv_check)
-        vbox.addWidget(card_en)
+        activation_layout.addWidget(tv_check)
+        vbox.addWidget(activation_card)
 
         live_box = QFrame()
         live_box.setObjectName("Card")
-        lb = QVBoxLayout(live_box)
-        lb.setContentsMargins(22, 18, 22, 20)
-        lb.setSpacing(14)
-        lb.addWidget(_group_title("\U0001f310", "Server Live"))
-        lb.addWidget(_divider())
-        lg = QGridLayout()
-        lg.setHorizontalSpacing(20)
-        lg.setVerticalSpacing(14)
-        lg.setColumnMinimumWidth(0, 190)
-        lg.setColumnStretch(1, 1)
+        live_layout = QVBoxLayout(live_box)
+        live_layout.setContentsMargins(22, 18, 22, 20)
+        live_layout.setSpacing(14)
+        live_layout.addWidget(_group_title("🌐", "Server Live"))
+        live_layout.addWidget(_divider())
+        live_grid = QGridLayout()
+        live_grid.setHorizontalSpacing(20)
+        live_grid.setVerticalSpacing(14)
+        live_grid.setColumnMinimumWidth(0, 190)
+        live_grid.setColumnStretch(1, 1)
         live_ip_edit = QLineEdit()
         live_ip_edit.setPlaceholderText("es. 127.0.0.1")
-        self._field_row(lg, 0, "IP server live", live_ip_edit)
+        self._field_row(live_grid, 0, "IP server live", live_ip_edit)
         live_port_edit = QLineEdit()
         live_port_edit.setPlaceholderText("es. 8080")
-        self._field_row(lg, 1, "Porta server live", live_port_edit)
-        lb.addLayout(lg)
-        lb.addWidget(_divider())
+        self._field_row(live_grid, 1, "Porta server live", live_port_edit)
+        live_layout.addLayout(live_grid)
+        live_layout.addWidget(_divider())
         live_public_check = QCheckBox("Tunnel pubblico via ngrok")
-        live_public_check.setToolTip("Espone il server live su URL pubblico tramite ngrok.")
-        lb.addWidget(live_public_check)
-        lb.addWidget(_hint_label(
-            "Richiede ngrok configurato e autenticato. "
-            "Consente l\u2019accesso esterno alla pagina live dal browser."
-        ))
+        live_layout.addWidget(live_public_check)
+        live_layout.addWidget(_hint_label("Richiede ngrok configurato e autenticato. Consente l’accesso esterno alla pagina live dal browser."))
         vbox.addWidget(live_box)
         vbox.addStretch(1)
         self._stack.addWidget(page)
         return live_check, tv_check, live_ip_edit, live_port_edit, live_public_check, live_box
 
-    # -------------------------------------------------------------------------
-    # Page 4 — Cartelle
-    # -------------------------------------------------------------------------
-
     def _build_page_cartelle(self):
-        page, vbox = self._make_page(
-            "Cartelle",
-            "Percorso radice per sessioni, classifiche e database"
-        )
+        page, vbox = self._make_page("Cartelle", "Percorso radice per sessioni, classifiche e database")
 
-        starting_box = QFrame()  # kept for SettingsWindowUIRefs compatibility
-
-        card, inner = self._card()
-        inner.addWidget(_group_title("\U0001f4c1", "Cartella dati"))
-        inner.addWidget(_divider())
-        inner.addWidget(_hint_label(
-            "Tutte le sessioni, classifiche e database vengono salvati in questa cartella. "
-            "Modificare solo se necessario e riavviare l\u2019applicazione."
-        ))
+        card, layout = self._card()
+        layout.addWidget(_group_title("📁", "Cartella dati"))
+        layout.addWidget(_divider())
+        layout.addWidget(_hint_label("Tutte le sessioni, classifiche e database vengono salvati in questa cartella. Modificare solo se necessario e riavviare l’applicazione."))
 
         root_path_edit = QLineEdit()
         root_path_edit.setPlaceholderText("C:\\Users\\...\\data")
-        browse_btn = QPushButton("  Sfoglia\u2026")
+        browse_btn = QPushButton("  Sfoglia…")
         browse_btn.setFixedHeight(40)
         browse_btn.setMinimumWidth(110)
-        browse_btn.setToolTip("Seleziona una cartella diversa")
 
         path_row = QHBoxLayout()
         path_row.setSpacing(10)
@@ -772,40 +666,48 @@ class SettingsWindowUI(QWidget):
         path_row.addWidget(root_path_edit, 1)
         path_row.addWidget(browse_btn, 0)
 
-        fg = QGridLayout()
-        fg.setHorizontalSpacing(12)
-        fg.setVerticalSpacing(14)
-        fg.setColumnMinimumWidth(0, 190)
-        fg.setColumnStretch(1, 1)
-        fg.addWidget(_field_label("Percorso cartella dati"), 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
-        fg.addLayout(path_row, 0, 1)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(14)
+        grid.setColumnMinimumWidth(0, 190)
+        grid.setColumnStretch(1, 1)
+        grid.addWidget(_field_label("Percorso cartella dati"), 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        grid.addLayout(path_row, 0, 1)
 
-        inner.addLayout(fg)
+        layout.addLayout(grid)
         vbox.addWidget(card)
         vbox.addStretch(1)
         self._stack.addWidget(page)
+        starting_box = QWidget()
         return root_path_edit, browse_btn, starting_box
-
-    # -------------------------------------------------------------------------
-    # Orchestrate
-    # -------------------------------------------------------------------------
 
     def _build_pages(self):
         monitor_combo, debug_check, manual_start_check = self._build_page_generale()
-        (conn_type_combo, debounce_edit,
-         tcp_ip_value_label, tcp_port_edit, tcp_card) = self._build_page_comunicazione()
+        conn_type_combo, debounce_edit, tcp_ip_value_label, tcp_port_edit, tcp_card = self._build_page_comunicazione()
+        heartbeat_interval_edit, heartbeat_max_missed_edit = self._build_page_heartbeat()
         dev_checks = self._build_page_dispositivi()
-        (live_check, tv_check, live_ip_edit,
-         live_port_edit, live_public_check, live_box) = self._build_page_live()
+        live_check, tv_check, live_ip_edit, live_port_edit, live_public_check, live_box = self._build_page_live()
         root_path_edit, browse_btn, starting_box = self._build_page_cartelle()
 
         return (
-            monitor_combo, debug_check, live_check, tv_check,
+            monitor_combo,
+            debug_check,
+            live_check,
+            tv_check,
             manual_start_check,
-            conn_type_combo, debounce_edit,
-            tcp_ip_value_label, tcp_port_edit, tcp_card,
+            conn_type_combo,
+            debounce_edit,
+            heartbeat_interval_edit,
+            heartbeat_max_missed_edit,
+            tcp_ip_value_label,
+            tcp_port_edit,
+            tcp_card,
             dev_checks,
-            live_ip_edit, live_port_edit, live_public_check, live_box,
-            root_path_edit, browse_btn,
+            live_ip_edit,
+            live_port_edit,
+            live_public_check,
+            live_box,
+            root_path_edit,
+            browse_btn,
             starting_box,
         )

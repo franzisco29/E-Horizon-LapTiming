@@ -4,28 +4,12 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import os
-import atexit
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import weakref
 
-from PySide6.QtCore import Qt, QTimer, Signal, Slot, QEvent, QObject, QPropertyAnimation, QEasingCurve, QPoint
-from PySide6.QtGui import QFontMetrics, QColor
-from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QTableWidgetItem,
-    QAbstractItemView,
-    QHeaderView,
-    QDialog,
-    QMessageBox,
-    QApplication,
-    QToolButton,
-    QLabel,
-    QFrame,
-    QHBoxLayout,
-)
+from PySide6.QtCore import Qt, QTimer, Signal, Slot, QEvent
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog
 
 from Modules.log_utils import log
 from Modules.net import get_local_ipv4
@@ -54,10 +38,15 @@ from Classes.driver import Driver
 from Classes.race_list import RaceList
 from Classes.race_manager import RaceManager, LapState
 from Classes.result_manager import ResultManager
-from Classes.recovery_manager import RaceRecoveryStore
+from Classes.analytics_manager import AnalyticsManager
 from Classes.session import SessionState, SESSION_NAMES
 from Modules.enums import RaceState
 # from Modules.sound_utils import beep_do, beep_lights_out
+from Classes.roadster import Roadster
+from UI.ResultPreviewWindow.result_preview_window import ResultPreviewWindow
+from UI.AnalyticsSetupDialog.analytics_setup_dialog import AnalyticsSetupDialog
+from UI.RaceManagerWindow.pilot_laps_dialog import PilotLapsDialog
+from UI.DiscoveryDialog.discovery_dialog import DiscoveryDialog
 
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 
@@ -78,43 +67,22 @@ class _LastSelection:
     pilot_key: Optional[str] = None
 
 
-class _HoverDeviceButtonFilter(QObject):
-    def __init__(self, window: "RaceManagerWindow") -> None:
-        super().__init__(window)
-        self._window = window
-
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        # No special handling here — keep as a pass-through event filter
-        return False
-
-
 class RaceManagerWindow(QWidget):
     # Mandatory signals (per tua regola)
     sig_transponder = Signal(int, int)
     sig_status = Signal(list)
     sig_log = Signal(str)
     sig_command = Signal(str, str)
-    sig_device_disconnected = Signal(str, str)
     sig_live_public_online = Signal()
-
-    _instances: weakref.WeakSet["RaceManagerWindow"] = weakref.WeakSet()
-    _shutdown_hooks_installed: bool = False
-    _about_to_quit_hooked: bool = False
-    _prev_sys_excepthook = None
-    _prev_threading_excepthook = None
 
     def __init__(self, settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._shutdown_lock = threading.Lock()
-        self._shutdown_devices_done = False
-        type(self)._register_shutdown_hooks(self)
         self.settings = settings
         self.setWindowTitle("RaceManager")
 
         # UI
         root, refs = build_race_manager_ui(self)
         self.refs: RaceManagerWindowRefs = refs
-        self.refs.pit_label.setWordWrap(True)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -137,26 +105,16 @@ class RaceManagerWindow(QWidget):
         # State
         self.yellows = [False, False, False]
         self.sc_active = False
-        # device overlay state
-        self._device_overlay_pinned = False
-        self._device_overlay_dialog: Optional[QDialog] = None
         self.vsc_active = False
-        self.wet_active = False
         self.sc_elapsed_sec = 0
         self.sc_compensation_sec = 0
         self.red_flag_out = False
         self.pre_race_active = False
         self.old_cmd: str = DeviceCommand.CLC_CMD.value
         self.old_pre_cmd: str = DeviceCommand.PRE_RACE_CMD.value
-        self.pit_override_active = False
-        self.pit_override_state: Optional[int] = None  # 0=closed, 1=open
         self._old_endurance: Optional[bool] = None
         self._last_sel = _LastSelection()
         self._analytics_context_cache: Dict[str, Any] = {}
-        self._recovery_store: Optional[RaceRecoveryStore] = None
-        self._recovery_dirty: bool = False
-        self._last_loaded_list_id: int = 0
-        self._recovery_payload: Optional[Dict[str, Any]] = None
 
         # Timers
         self._ses_timer = QTimer(self)
@@ -170,10 +128,6 @@ class RaceManagerWindow(QWidget):
         self._pre_timer = QTimer(self)
         self._pre_timer.setInterval(1000)
         self._pre_timer.timeout.connect(self._on_pre_race_tick)
-
-        self._recovery_timer = QTimer(self)
-        self._recovery_timer.setInterval(5000)
-        self._recovery_timer.timeout.connect(self._on_recovery_tick)
 
         # manual start lights sequence timer (S1..S5 ogni 1s)
         self._lights_step: int = 0
@@ -191,13 +145,6 @@ class RaceManagerWindow(QWidget):
         self._startup_win: Optional[StatusWindow] = None
         self._startup_timer: Optional[QTimer] = None
         self._racepanel_status_timer: Optional[QTimer] = None
-        self._device_status_timer: Optional[QTimer] = None
-        self._device_overlay_panel: Optional[QFrame] = None
-        self._device_overlay_title: Optional[QLabel] = None
-        self._device_overlay_body: Optional[QFrame] = None
-        self._device_overlay_hide_timer: Optional[QTimer] = None
-        self._device_button_filter: Optional[_HoverDeviceButtonFilter] = None
-        self._is_closing: bool = False
         self._init_done: bool = False
         self._init_step_index: int = 0
 
@@ -206,83 +153,10 @@ class RaceManagerWindow(QWidget):
         self._setup_table()
         self._bind_signals()
         self._bind_ui()
-        self._setup_device_overlay()
         self.refs.load_btn.setEnabled(False)
         self.refs.racelist_box.setEnabled(False)
         self.setEnabled(False)
         QTimer.singleShot(0, self._deferred_init)
-
-    @classmethod
-    def _register_shutdown_hooks(cls, instance: "RaceManagerWindow") -> None:
-        cls._instances.add(instance)
-
-        app = QApplication.instance()
-        if app is not None and not cls._about_to_quit_hooked:
-            try:
-                app.aboutToQuit.connect(cls._shutdown_all_instances_best_effort)
-                cls._about_to_quit_hooked = True
-            except Exception as ex:
-                log(f"[RaceWindow] aboutToQuit hook error: {ex}")
-
-        if cls._shutdown_hooks_installed:
-            return
-
-        cls._prev_sys_excepthook = sys.excepthook
-
-        def _sys_hook(exc_type, exc, tb):
-            try:
-                cls._shutdown_all_instances_best_effort()
-            except Exception:
-                pass
-            try:
-                if cls._prev_sys_excepthook:
-                    cls._prev_sys_excepthook(exc_type, exc, tb)
-            except Exception:
-                traceback.print_exception(exc_type, exc, tb)
-
-        sys.excepthook = _sys_hook
-
-        if hasattr(threading, "excepthook"):
-            cls._prev_threading_excepthook = threading.excepthook
-
-            def _thread_hook(args):
-                try:
-                    cls._shutdown_all_instances_best_effort()
-                except Exception:
-                    pass
-                try:
-                    if cls._prev_threading_excepthook:
-                        cls._prev_threading_excepthook(args)
-                except Exception:
-                    traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
-
-            threading.excepthook = _thread_hook
-
-        atexit.register(cls._shutdown_all_instances_best_effort)
-        cls._shutdown_hooks_installed = True
-
-    @classmethod
-    def _shutdown_all_instances_best_effort(cls) -> None:
-        for win in list(cls._instances):
-            try:
-                win._shutdown_devices_sync(reason="global-hook")
-            except Exception:
-                pass
-
-    def _shutdown_devices_sync(self, reason: str = "") -> None:
-        if not self.device_man:
-            return
-
-        with self._shutdown_lock:
-            if self._shutdown_devices_done:
-                return
-            self._shutdown_devices_done = True
-
-        try:
-            self.device_man.disconnect_all()
-            log(f"DeviceManager disconnected ({reason})")
-        except Exception as exc:
-            log(f"[RaceWindow] DeviceManager disconnect error ({reason}): {exc}")
 
     def _deferred_init(self) -> None:
         self._init_step_index = 0
@@ -346,475 +220,6 @@ class RaceManagerWindow(QWidget):
         status = "ONLINE" if connected else "OFFLINE"
         self.refs.flag_group.setTitle(f"Flag Control  [RacePanel: {status}]")
 
-    def _setup_device_overlay(self) -> None:
-        # persistent overlay panel to avoid recreating widgets each refresh
-        self._device_overlay_panel = QFrame(self)
-        self._device_overlay_panel.setObjectName("DeviceOverlayPanel")
-        self._device_overlay_panel.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
-        self._device_overlay_panel.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self._device_overlay_panel.setAttribute(Qt.WA_TranslucentBackground, True)
-        self._device_overlay_panel.setVisible(False)
-        self._device_overlay_panel.setStyleSheet(
-            "QFrame#DeviceOverlayPanel { background: rgba(12,16,24,0.98); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; }"
-        )
-
-        panel_layout = QVBoxLayout(self._device_overlay_panel)
-        panel_layout.setContentsMargins(10, 8, 10, 8)
-        panel_layout.setSpacing(6)
-
-        title = QLabel("DISPOSITIVI", self._device_overlay_panel)
-        title.setObjectName("DeviceOverlayTitle")
-        title.setStyleSheet("color: rgba(43,183,255,0.85); font-weight:700; font-size:11px;")
-        panel_layout.addWidget(title)
-        self._device_overlay_title = title
-
-        body = QFrame(self._device_overlay_panel)
-        body.setObjectName("DeviceOverlayBody")
-        body.setStyleSheet("background: transparent;")
-        body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(2)
-        panel_layout.addWidget(body)
-        self._device_overlay_body = body
-
-        # create labels once (avoids flicker)
-        self._device_overlay_items: List[QLabel] = []
-        for name in DeviceManager.DEVICE_NAMES:
-            lbl = QLabel("", self._device_overlay_panel)
-            lbl.setObjectName("DeviceOverlayItem")
-            lbl.setStyleSheet("font-size:11px; padding:2px 6px;")
-            lbl.setTextFormat(Qt.RichText)
-            body_layout.addWidget(lbl)
-            self._device_overlay_items.append(lbl)
-        body_layout.addStretch(1)
-
-        # animations
-        self._device_show_anim = QPropertyAnimation(self._device_overlay_panel, b"pos", self)
-        self._device_show_anim.setEasingCurve(QEasingCurve.OutCubic)
-        self._device_show_anim.setDuration(220)
-        self._device_opacity_anim = QPropertyAnimation(self._device_overlay_panel, b"windowOpacity", self)
-        self._device_opacity_anim.setDuration(200)
-
-        self._device_overlay_hide_timer = QTimer(self)
-        self._device_overlay_hide_timer.setSingleShot(True)
-        self._device_overlay_hide_timer.setInterval(180)
-        self._device_overlay_hide_timer.timeout.connect(self._hide_device_overlay)
-
-        self._device_button_filter = _HoverDeviceButtonFilter(self)
-        self.refs.device_btn.installEventFilter(self._device_button_filter)
-
-        if self._device_overlay_panel is not None:
-            self._device_overlay_panel.installEventFilter(self)
-
-        # small arrow pointing to the button
-        self._device_arrow = QLabel("◂", self)
-        self._device_arrow.setVisible(False)
-        self._device_arrow.setStyleSheet("color: rgba(43,183,255,0.95); font-size:18px;")
-        self._device_arrow.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        if obj is self._device_overlay_panel:
-            if event.type() == QEvent.Enter:
-                if self._device_overlay_hide_timer:
-                    self._device_overlay_hide_timer.stop()
-            elif event.type() == QEvent.Leave:
-                self._schedule_hide_device_overlay()
-        return super().eventFilter(obj, event)
-
-    def _build_device_overlay_item(self, name: str, connected: bool, active: bool) -> QLabel:
-        if connected:
-            text = f"{name} — Connesso"
-            fg = "#34d399"
-        elif active:
-            text = f"{name} — Non Connesso"
-            fg = "#9aa4b2"
-        else:
-            text = f"{name} — Non Attivato"
-            fg = "#6d7480"
-
-        lbl = QLabel(text, self._device_overlay_panel)
-        lbl.setStyleSheet(f"color: {fg}; font-size:11px; padding:2px 6px;")
-        return lbl
-
-    def _rebuild_device_overlay(self) -> None:
-        if self._is_closing:
-            return
-
-        if not self._device_overlay_panel or not self._device_overlay_items:
-            return
-
-        if not self.device_man:
-            for lbl in self._device_overlay_items:
-                lbl.setText("")
-                lbl.setStyleSheet("color:#6d7480; font-size:11px; padding:2px 6px;")
-            self._device_overlay_title.setText("DISPOSITIVI — non disponibili")
-            return
-
-        with self.device_man._lock:
-            for i, name in enumerate(self.device_man.DEVICE_NAMES):
-                connected = f"D{i}" in self.device_man._devices
-                always_accepted = i in self.device_man._ALWAYS_ACCEPTED_IDS
-                active = always_accepted or (i < len(self.device_man.active_flags) and self.device_man.active_flags[i])
-
-                lbl = self._device_overlay_items[i]
-                if connected:
-                    status = "Connesso"
-                    fg = "#34d399"
-                elif active:
-                    status = "Non Connesso"
-                    fg = "#9aa4b2"
-                else:
-                    status = "Non Attivato"
-                    fg = "#6d7480"
-
-                # bullet + text as rich text to avoid repaint flicker
-                bullet = f"<span style='color:{fg}; font-size:12px;'>●</span>"
-                text = f"{bullet} <span style='color:{fg}; font-size:11px;'>{name} — {status}</span>"
-
-                # defensive: QLabel could have been deleted from C++ side; recreate if so
-                try:
-                    lbl.setText(text)
-                    lbl.setStyleSheet("padding:2px 6px;")
-                except RuntimeError:
-                    try:
-                        new_lbl = QLabel(text, self._device_overlay_panel)
-                        new_lbl.setTextFormat(Qt.RichText)
-                        new_lbl.setStyleSheet("padding:2px 6px;")
-                        # replace in layout/list
-                        parent_layout = self._device_overlay_body.layout()
-                        if parent_layout is not None:
-                            # find index and replace widget in layout
-                            for idx in range(parent_layout.count()):
-                                item = parent_layout.itemAt(idx)
-                                if item and getattr(item, 'widget', None) and item.widget() is lbl:
-                                    # remove old (if possible) and insert new
-                                    try:
-                                        w = item.widget()
-                                        parent_layout.removeWidget(w)
-                                        w.deleteLater()
-                                    except Exception:
-                                        pass
-                                    parent_layout.insertWidget(idx, new_lbl)
-                                    break
-                        self._device_overlay_items[i] = new_lbl
-                    except Exception:
-                        pass
-
-        try:
-            if self._device_overlay_title is not None:
-                self._device_overlay_title.setText("DISPOSITIVI")
-        except RuntimeError:
-            return
-
-    def _show_device_overlay(self) -> None:
-        if not self._device_overlay_panel:
-            return
-
-        self._rebuild_device_overlay()
-        button = self.refs.device_btn
-        panel = self._device_overlay_panel
-        panel.adjustSize()
-
-        br = button.mapToGlobal(button.rect().bottomRight())
-        available = QApplication.primaryScreen().availableGeometry()
-        target_x = br.x() + 8
-        target_y = br.y() - panel.sizeHint().height() - 4
-        if target_x + panel.sizeHint().width() > available.right():
-            target_x = button.mapToGlobal(button.rect().bottomLeft()).x() - panel.sizeHint().width() - 8
-        if target_y < available.top():
-            target_y = br.y()
-
-        start_pos = QPoint(target_x, target_y + 8)
-        end_pos = QPoint(target_x, target_y)
-
-        panel.move(start_pos)
-        panel.setWindowOpacity(0.0)
-        panel.show()
-        panel.raise_()
-        # position arrow near panel pointing to button
-        try:
-            arrow = self._device_arrow
-            arrow.adjustSize()
-            arrow_x = end_pos.x() - arrow.width() + 6
-            btn_center = button.mapToGlobal(button.rect().center())
-            arrow_y = btn_center.y() - (arrow.height() // 2)
-            arrow.move(arrow_x, arrow_y)
-            arrow.setVisible(True)
-            arrow.raise_()
-        except Exception:
-            pass
-
-        # run animations (pos + opacity)
-        self._device_show_anim.stop()
-        self._device_opacity_anim.stop()
-        self._device_show_anim.setStartValue(start_pos)
-        self._device_show_anim.setEndValue(end_pos)
-        self._device_opacity_anim.setStartValue(0.0)
-        self._device_opacity_anim.setEndValue(1.0)
-        self._device_show_anim.start()
-        self._device_opacity_anim.start()
-
-    def _hide_device_overlay(self) -> None:
-        if self._device_overlay_panel and self._device_overlay_panel.isVisible():
-            # reverse animation then hide
-            if self._device_show_anim.state() == QPropertyAnimation.Running:
-                self._device_show_anim.stop()
-            if self._device_opacity_anim.state() == QPropertyAnimation.Running:
-                self._device_opacity_anim.stop()
-
-            end_pos = self._device_overlay_panel.pos() + QPoint(0, 8)
-            self._device_show_anim.setStartValue(self._device_overlay_panel.pos())
-            self._device_show_anim.setEndValue(end_pos)
-            self._device_opacity_anim.setStartValue(self._device_overlay_panel.windowOpacity())
-            self._device_opacity_anim.setEndValue(0.0)
-
-            def _on_hid():
-                try:
-                    self._device_overlay_panel.hide()
-                    try:
-                        self._device_arrow.setVisible(False)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-
-            # ensure single connection
-            try:
-                self._device_opacity_anim.finished.disconnect()
-            except Exception:
-                pass
-            self._device_opacity_anim.finished.connect(_on_hid)
-            self._device_show_anim.start()
-            self._device_opacity_anim.start()
-
-    def _schedule_hide_device_overlay(self) -> None:
-        # do not auto-hide if pinned
-        if getattr(self, '_device_overlay_pinned', False):
-            return
-        if self._device_overlay_hide_timer:
-            self._device_overlay_hide_timer.start()
-
-    def _toggle_pin_device_overlay(self) -> None:
-        # Toggle pinned state: when pinned, overlay remains visible until unpinned
-        self._device_overlay_pinned = not getattr(self, '_device_overlay_pinned', False)
-        if self._device_overlay_pinned:
-            # ensure visible
-            self._show_device_overlay()
-            if self._device_overlay_hide_timer:
-                self._device_overlay_hide_timer.stop()
-        else:
-            # unpinned -> schedule hide
-            self._schedule_hide_device_overlay()
-
-    def _open_device_modeless_dialog(self) -> None:
-        # Open a non-blocking dialog showing current device list (copy of overlay)
-        try:
-            if self._device_overlay_dialog is not None:
-                try:
-                    # if visible, bring to front; otherwise show
-                    if self._device_overlay_dialog.isVisible():
-                        self._device_overlay_dialog.hide()
-                    else:
-                        self._device_overlay_dialog.show()
-                        self._device_overlay_dialog.raise_()
-                        self._device_overlay_dialog.activateWindow()
-                except Exception:
-                    pass
-                return
-
-            # custom frameless modeless dialog with header and scroll area
-            class _DeviceDialog(QDialog):
-                def __init__(self, parent=None):
-                    super().__init__(parent)
-                    self._drag_pos = None
-
-                def mousePressEvent(self, ev):
-                    if ev.button() == Qt.LeftButton:
-                        self._drag_pos = ev.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                        ev.accept()
-
-                def mouseMoveEvent(self, ev):
-                    if self._drag_pos is not None and ev.buttons() & Qt.LeftButton:
-                        try:
-                            self.move(ev.globalPosition().toPoint() - self._drag_pos)
-                        except Exception:
-                            pass
-                        ev.accept()
-
-                def mouseReleaseEvent(self, ev):
-                    self._drag_pos = None
-
-            dlg = _DeviceDialog(self)
-            dlg.setWindowTitle("Dispositivi")
-            dlg.setModal(False)
-            dlg.setAttribute(Qt.WA_ShowWithoutActivating, True)
-            dlg.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-            # main layout contains a styled frame for rounded background
-            main_layout = QVBoxLayout(dlg)
-            main_layout.setContentsMargins(0, 0, 0, 0)
-            container = QFrame(dlg)
-            container.setObjectName("DeviceDialogContainer")
-            container.setStyleSheet(
-                "QFrame#DeviceDialogContainer { background: rgba(12,16,24,0.96); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; }"
-            )
-            layout = QVBoxLayout(container)
-            layout.setContentsMargins(10, 8, 10, 10)
-            layout.setSpacing(8)
-
-            # header with title and close button
-            header = QFrame(container)
-            hdr_l = QHBoxLayout(header)
-            hdr_l.setContentsMargins(0, 0, 0, 0)
-            hdr_l.setSpacing(6)
-            title = QLabel("DISPOSITIVI", header)
-            title.setStyleSheet("color: rgba(43,183,255,0.95); font-weight:700; font-size:12px;")
-            hdr_l.addWidget(title)
-            hdr_l.addStretch(1)
-            layout.addWidget(header)
-
-            # scroll area for items
-            from PySide6.QtWidgets import QScrollArea
-
-            scroll = QScrollArea(container)
-            scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QFrame.NoFrame)
-            items_widget = QFrame()
-            items_layout = QVBoxLayout(items_widget)
-            items_layout.setContentsMargins(0, 0, 0, 0)
-            items_layout.setSpacing(4)
-            scroll.setWidget(items_widget)
-            layout.addWidget(scroll)
-
-            # keep references
-            self._device_dialog_items_widget = items_widget
-            self._device_dialog_items_layout = items_layout
-            main_layout.addWidget(container)
-
-            # copy current overlay items
-            self._device_overlay_dialog_items = []
-            for lbl in self._device_overlay_items:
-                item = QLabel(lbl.text(), self._device_dialog_items_widget)
-                item.setTextFormat(Qt.RichText)
-                item.setStyleSheet("padding:6px 8px; color: #cfe7ff;")
-                self._device_dialog_items_layout.addWidget(item)
-                self._device_overlay_dialog_items.append(item)
-            self._device_dialog_items_layout.addStretch(1)
-
-            # no close button: dialog is closed by re-clicking the device button
-
-            # connect live updates from DeviceManager if available
-            def _update_dialog_items():
-                try:
-                    if not self.device_man:
-                        return
-                    with self.device_man._lock:
-                        for i, name in enumerate(self.device_man.DEVICE_NAMES):
-                            connected = f"D{i}" in self.device_man._devices
-                            always_accepted = i in self.device_man._ALWAYS_ACCEPTED_IDS
-                            active = always_accepted or (i < len(self.device_man.active_flags) and self.device_man.active_flags[i])
-                            if connected:
-                                status = "Connesso"
-                                fg = "#34d399"
-                            elif active:
-                                status = "Non Connesso"
-                                fg = "#9aa4b2"
-                            else:
-                                status = "Non Attivato"
-                                fg = "#6d7480"
-                            bullet = f"<span style='color:{fg}; font-size:12px;'>●</span>"
-                            text = f"{bullet} <span style='color:{fg}; font-size:11px;'>{name} — {status}</span>"
-                            try:
-                                self._device_overlay_dialog_items[i].setText(text)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-
-            # store the slot so we can disconnect later
-            self._device_dialog_update_slot = lambda: QTimer.singleShot(0, _update_dialog_items)
-            try:
-                if self.device_man is not None:
-                    self.device_man.devicesChanged.connect(self._device_dialog_update_slot)
-            except Exception:
-                self._device_dialog_update_slot = None
-
-            dlg.setLayout(layout)
-            dlg.adjustSize()
-            # position as dropdown under the device button
-            try:
-                btn = self.refs.device_btn
-                bl = btn.mapToGlobal(btn.rect().bottomLeft())
-                x = bl.x()
-                y = bl.y() + 6
-                # ensure fits on screen horizontally
-                available = QApplication.primaryScreen().availableGeometry()
-                if x + dlg.sizeHint().width() > available.right():
-                    x = available.right() - dlg.sizeHint().width() - 8
-                dlg.move(x, y)
-            except Exception:
-                pass
-
-            self._device_overlay_dialog = dlg
-
-            def _on_closed():
-                try:
-                    # disconnect specific slot if connected
-                    try:
-                        if self.device_man is not None and getattr(self, '_device_dialog_update_slot', None) is not None:
-                            try:
-                                self.device_man.devicesChanged.disconnect(self._device_dialog_update_slot)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                    self._device_overlay_dialog = None
-                    self._device_overlay_dialog_items = []
-                    self._device_dialog_update_slot = None
-                except Exception:
-                    pass
-
-            dlg.finished.connect(lambda _: _on_closed())
-
-            # fade-in animation for smoother appearance
-            try:
-                dlg.setWindowOpacity(0.0)
-                dlg.show()
-                dlg.raise_()
-                dlg.activateWindow()
-                anim = QPropertyAnimation(dlg, b"windowOpacity", self)
-                anim.setDuration(160)
-                anim.setStartValue(0.0)
-                anim.setEndValue(1.0)
-                anim.start()
-            except Exception:
-                try:
-                    dlg.show()
-                except Exception:
-                    pass
-        except Exception as ex:
-            log(f"[RaceWindow] _open_device_modeless_dialog error: {ex}")
-
-    def _toggle_device_dialog(self) -> None:
-        try:
-            if self._device_overlay_dialog is not None and self._device_overlay_dialog.isVisible():
-                try:
-                    self._device_overlay_dialog.close()
-                except Exception:
-                    try:
-                        self._device_overlay_dialog.hide()
-                    except Exception:
-                        pass
-            else:
-                self._open_device_modeless_dialog()
-        except Exception as ex:
-            log(f"[RaceWindow] _toggle_device_dialog error: {ex}")
-
-    def _toggle_device_overlay(self) -> None:
-        if self._device_overlay_panel and self._device_overlay_panel.isVisible():
-            self._hide_device_overlay()
-        else:
-            self._show_device_overlay()
-
     # ------------------------------------------------------------
     # UI/table setup -- OK DO NOT TOUCH
     # ------------------------------------------------------------
@@ -849,8 +254,8 @@ class RaceManagerWindow(QWidget):
         # come VB: dopo startup, puoi caricare lista; start/stop solo dopo load
         self.refs.start_btn.setEnabled(False)
         self.refs.reset_btn.setEnabled(False)
-        self.refs.recovery_btn.setEnabled(False)
-        self.refs.save_results_btn.setEnabled(False)
+        # Mantieni sempre abilitato il pulsante Genera Risultati
+        self.refs.save_results_btn.setEnabled(True)
         self.refs.analytics_btn.setEnabled(False)
         self.refs.pre_race_btn.setEnabled(False)
         self.refs.apply_status_btn.setEnabled(False)
@@ -862,7 +267,6 @@ class RaceManagerWindow(QWidget):
         self.sig_transponder.connect(self._on_transponder_gui_thread)
         self.sig_log.connect(self._on_log_gui_thread)
         self.sig_command.connect(self._on_command_gui_thread)
-        self.sig_device_disconnected.connect(self._on_device_disconnected_gui_thread)
         self.sig_live_public_online.connect(self._on_live_public_online)
 
     def _set_live_badge(self, text: str, color: str, background: str) -> None:
@@ -895,7 +299,6 @@ class RaceManagerWindow(QWidget):
         r.load_btn.clicked.connect(self._on_load_clicked)
         r.start_btn.clicked.connect(self._on_start_clicked)
         r.reset_btn.clicked.connect(self._on_reset_clicked)
-        r.recovery_btn.clicked.connect(self._on_recovery_clicked)
         r.save_results_btn.clicked.connect(self._on_save_results_clicked)
         r.analytics_btn.clicked.connect(self._on_generate_analytics_clicked)
         r.live_btn.clicked.connect(self._on_open_live_clicked)
@@ -921,12 +324,6 @@ class RaceManagerWindow(QWidget):
         r.session_box.currentIndexChanged.connect(self._on_session_type_changed)
         r.lap_table.cellDoubleClicked.connect(self._on_table_double_click)
 
-        # device button: single click toggles the device dialog
-        try:
-            r.device_btn.clicked.connect(self._toggle_device_dialog)
-        except Exception:
-            pass
-
     def _on_table_double_click(self, row: int, col: int) -> None:
         if not (self.race_man and self.session_race_list):
             return
@@ -935,8 +332,6 @@ class RaceManagerWindow(QWidget):
             return
         driver = drivers[row]
         is_race = bool(self.race_man.race)
-        from UI.RaceManagerWindow.pilot_laps_dialog import PilotLapsDialog
-
         dlg = PilotLapsDialog(driver, is_race, parent=self)
         dlg.sig_laps_changed.connect(self._on_pilot_laps_changed)
         dlg.setAttribute(Qt.WA_DeleteOnClose)
@@ -991,95 +386,8 @@ class RaceManagerWindow(QWidget):
         self.refs.sc_btn.setStyleSheet(sc_style)
         self.refs.vsc_btn.setCheckable(True)
         self.refs.vsc_btn.setStyleSheet(vsc_style)
-        self.refs.op_pit_btn.setCheckable(True)
-        self.refs.cl_pit_btn.setCheckable(True)
-        self._refresh_pit_override_buttons_ui()
 
         self._refresh_flag_buttons_ui()
-
-    def _refresh_pit_override_buttons_ui(self) -> None:
-        op_active = bool(self.pit_override_active and self.pit_override_state == 1)
-        cl_active = bool(self.pit_override_active and self.pit_override_state == 0)
-
-        op_style = (
-            "QPushButton {"
-            "background-color: #22c55e;"
-            "color: #051b0c;"
-            "border: 2px solid #15803d;"
-            "font-weight: 700;"
-            "}"
-            "QPushButton:hover {"
-            "background-color: #34d399;"
-            "}"
-        )
-        cl_style = (
-            "QPushButton {"
-            "background-color: #ef4444;"
-            "color: #2a0606;"
-            "border: 2px solid #b91c1c;"
-            "font-weight: 700;"
-            "}"
-            "QPushButton:hover {"
-            "background-color: #f87171;"
-            "}"
-        )
-
-        self.refs.op_pit_btn.blockSignals(True)
-        self.refs.op_pit_btn.setChecked(op_active)
-        self.refs.op_pit_btn.setStyleSheet(op_style if op_active else "")
-        self.refs.op_pit_btn.blockSignals(False)
-
-        self.refs.cl_pit_btn.blockSignals(True)
-        self.refs.cl_pit_btn.setChecked(cl_active)
-        self.refs.cl_pit_btn.setStyleSheet(cl_style if cl_active else "")
-        self.refs.cl_pit_btn.blockSignals(False)
-
-    def _set_pit_label_text(self, base_text: str) -> None:
-        if bool(self.pit_override_active):
-            self.refs.pit_label.setText(f"{base_text}\nPIT OVERRIDE ON")
-        else:
-            self.refs.pit_label.setText(base_text)
-
-    def _disable_pit_override(self, *, resync_auto: bool = False) -> None:
-        was_active = bool(self.pit_override_active)
-        self.pit_override_active = False
-        self.pit_override_state = None
-        self._mark_recovery_dirty()
-        self._refresh_pit_override_buttons_ui()
-
-        if was_active:
-            if self.device_man:
-                try:
-                    self.device_man.broadcast(DeviceCommand.PIT_OFF_CMD.value)
-                except Exception as e:
-                    log(f"[RaceWindow] PIT_OFF broadcast ERROR: {e}")
-            log("Pit override OFF (auto mode)")
-
-        if resync_auto:
-            try:
-                self.control_pit_lane_open()
-            except Exception as e:
-                log(f"[RaceWindow] PIT auto resync ERROR: {e}")
-
-    def _enable_pit_override(self, force_state: int) -> None:
-        state = 1 if int(force_state) == 1 else 0
-        self.pit_override_active = True
-        self.pit_override_state = state
-        self.pit_open_val = state
-        self._mark_recovery_dirty()
-        self._refresh_pit_override_buttons_ui()
-
-        if state == 1:
-            self._set_pit_label_text("Pit Open (Manual)")
-            log("Pit override ON -> OPEN")
-        else:
-            self._set_pit_label_text("Pit Closed (Manual)")
-            log("Pit override ON -> CLOSED")
-
-        try:
-            self.control_pit_lane_open(state)
-        except Exception as e:
-            log(f"[RaceWindow] PIT manual override sync ERROR: {e}")
 
     def _refresh_flag_buttons_ui(self) -> None:
         for idx, btn in enumerate((self.refs.ys1_btn, self.refs.ys2_btn, self.refs.ys3_btn)):
@@ -1181,11 +489,6 @@ class RaceManagerWindow(QWidget):
         self.drivers_repo = DriversRepo(self.db)
         self.roadsters_repo = RoadstersRepo(self.db)
         self.racelists_repo = RaceListsRepo(self.db)
-
-        self._recovery_store = RaceRecoveryStore(str(root_path))
-        self._recovery_store.cleanup(max_age_hours=24)
-        if not self._recovery_timer.isActive():
-            self._recovery_timer.start()
 
         log(f"[RaceWindow] DB init ok: {db_path}")
 
@@ -1298,40 +601,46 @@ class RaceManagerWindow(QWidget):
         ip = self._get_local_ip_best_effort()
         tcp_port = int(getattr(getattr(self.settings, "devices", None), "tcp_port", 20777))
         conn_type = int(getattr(getattr(self.settings, "devices", None), "connection_type", 0))
+        ble_mac_address = str(getattr(getattr(self.settings, "devices", None), "ble_mac_address", "")).strip()
+        # Allinea min_lap_s BLE al debounce configurato (ms -> secondi).
+        ble_min_lap_s = max(0.0, float(debounce_ms) / 1000.0)
         flags_raw = str(getattr(getattr(self.settings, "devices", None), "device_available", "1,1,1,1,1,1"))
         active_flags = self._parse_active_flags(flags_raw)
 
-        log(f"[RaceWindow] DeviceManager config: IP={ip} PORT={tcp_port} ConnType={conn_type} Flags={active_flags}")
+        # Discovery dialog per LAPMONITOR se MAC non configurato
+        if conn_type == ConnectionTypes.LAPMONITOR:
+            if not ble_mac_address:
+                log("[RaceWindow] LAPMONITOR: MAC non configurato, mostra discovery dialog")
+                discovery = DiscoveryDialog(self, self.settings, conn_type)
+                if discovery.exec() != QDialog.Accepted:
+                    log("[RaceWindow] Discovery cancelled -> closing")
+                    self.close()
+                    return
+                ble_mac_address = self.settings.ble_mac_address
+
+        log(f"[RaceWindow] DeviceManager config: IP={ip} PORT={tcp_port} ConnType={conn_type} BLE_MAC={ble_mac_address} BLE_MIN_LAP_S={ble_min_lap_s:.3f} Flags={active_flags}")
 
         dbg = bool(getattr(self.settings, "debug", False))
-        # Impostiamo un timeout per accept() per permettere uno shutdown più reattivo
-        self.device_man = DeviceManager(ip, tcp_port, conn_type, active_flags, debug_log=dbg, accept_timeout_s=1.0)
+        self.device_man = DeviceManager(
+            ip,
+            tcp_port,
+            conn_type,
+            active_flags,
+            debug_log=dbg,
+            ble_mac_address=ble_mac_address,
+            ble_min_lap_s=ble_min_lap_s,
+        )
         self.device_man.on_log = self._cb_log
         self.device_man.on_transponder_received_index = self._cb_transponder
         self.device_man.on_command_received = self._cb_command
-        self.device_man.on_device_disconnected = self._cb_device_disconnected
         type(self.device_man).add_transponder_simulated_index_listener(self._cb_transponder)
         self._update_racepanel_status_ui()
-        self._rebuild_device_overlay()
 
         if self._racepanel_status_timer is None:
             self._racepanel_status_timer = QTimer(self)
             self._racepanel_status_timer.setInterval(500)
             self._racepanel_status_timer.timeout.connect(self._update_racepanel_status_ui)
             self._racepanel_status_timer.start()
-
-        # Use event-driven updates from DeviceManager (Qt Signal if available)
-        try:
-            # connect Qt signal (thread-safe)
-            try:
-                self.device_man.devicesChanged.connect(lambda: QTimer.singleShot(0, self._rebuild_device_overlay))
-            except Exception:
-                pass
-
-            # keep callback assignment for backward compatibility
-            self.device_man.on_devices_changed = lambda: QTimer.singleShot(0, self._rebuild_device_overlay)
-        except Exception:
-            pass
 
         # UI session info
         self.refs.ip_label.setText(ip if conn_type != ConnectionTypes.NONE else "NONE")
@@ -1361,7 +670,6 @@ class RaceManagerWindow(QWidget):
 
         self._startup_win.update_status(self.device_man.get_device_status_list())
         self._update_racepanel_status_ui()
-        self._rebuild_device_overlay()
 
         if self.device_man.all_required_devices_connected():
             log("Startup: all devices connected")
@@ -1382,15 +690,6 @@ class RaceManagerWindow(QWidget):
 
     def _cb_command(self, device_id: str, cmd: str) -> None:
         self.sig_command.emit(str(device_id), str(cmd))
-
-    def _cb_device_disconnected(self, device_id: str, reason: str) -> None:
-        self.sig_device_disconnected.emit(str(device_id), str(reason))
-
-    @Slot(str, str)
-    def _on_device_disconnected_gui_thread(self, device_id: str, reason: str) -> None:
-        msg = f"Dispositivo {device_id} disconnesso: {reason}"
-        log(f"[RaceWindow] [Device] {msg}", level="WARN")
-        QMessageBox.warning(self, "Dispositivo disconnesso", msg)
 
     @Slot(str, str)
     def _on_command_gui_thread(self, device_id: str, cmd: str) -> None:
@@ -1504,7 +803,6 @@ class RaceManagerWindow(QWidget):
             return
 
         list_id = self._selected_list_id()
-        self._last_loaded_list_id = int(list_id)
         log(f"[RaceWindow]  LOAD click: list_id={list_id} text='{self.refs.racelist_box.currentText()}'")
 
         try:
@@ -1531,11 +829,8 @@ class RaceManagerWindow(QWidget):
 
         # update header info
         self.refs.session_value.setText(self.refs.session_box.currentText())
-        self._set_pit_label_text("Pit Closed")
+        self.refs.pit_label.setText("Pit Closed")
         self.refs.timer_value.setText(self._format_mmss(getattr(self.race_man, "session_time", 0)))
-
-        self._try_restore_after_load(list_id)
-        self._mark_recovery_dirty()
 
         if self.live_man and self.live_man.enabled:
             self.live_man.send_session_info(self.race_man)
@@ -1578,8 +873,6 @@ class RaceManagerWindow(QWidget):
 
         all_rs = self.roadsters_repo.list_all()
         by_id: Dict[int, RoadsterRow] = {r.roadster_id: r for r in all_rs}
-
-        from Classes.roadster import Roadster
 
         roadsters: List[Roadster] = []
 
@@ -1905,7 +1198,6 @@ class RaceManagerWindow(QWidget):
         # NOT STARTED  (VB NotStarted)
         # ------------------------------------------------------------
         if act_state == SessionState.NotStarted:
-            self._disable_pit_override(resync_auto=False)
             _disable_combos(True)
             self.refs.load_btn.setEnabled(False)
 
@@ -1997,7 +1289,7 @@ class RaceManagerWindow(QWidget):
             self._pos_timer.stop()
 
             # VB: PitStateLB.Text = "Pit Closed"
-            self._set_pit_label_text("Pit Closed")
+            self.refs.pit_label.setText("Pit Closed")
 
             # VB: writeLapTiming
             _refresh_table()
@@ -2015,11 +1307,17 @@ class RaceManagerWindow(QWidget):
             # Ensure load button is enabled after session ends
             self.refs.load_btn.setEnabled(self.refs.racelist_box.count() > 0)
 
+            # Mantieni il pulsante Genera Risultati abilitato quando la sessione termina
+            try:
+                self.refs.save_results_btn.setEnabled(True)
+            except Exception:
+                pass
+
             # VB: raceMan.ResetSession()
             self.race_man.reset_session()
 
             # VB: PitStateLB.Text = "Pit Closed"
-            self._set_pit_label_text("Pit Closed")
+            self.refs.pit_label.setText("Pit Closed")
 
             # VB: StartBT.Text = "Avanti"
             self.refs.start_btn.setText("Avanti")
@@ -2081,7 +1379,6 @@ class RaceManagerWindow(QWidget):
         # STOPPED  (VB Stopped)
         # ------------------------------------------------------------
         elif act_state == SessionState.Stopped:
-            self._disable_pit_override(resync_auto=False)
             # VB: redFlagOut = False
             self.red_flag_out = False
 
@@ -2094,7 +1391,7 @@ class RaceManagerWindow(QWidget):
             except Exception:
                 sess_type = int(getattr(self.race_man, "session_type", 0) or 0)
 
-            if sess_type > 0 or not self._ses_timer.isActive():
+            if sess_type > 0:
                 self._ses_timer.start()
 
             # VB: raceMan.ResumeSession()
@@ -2126,8 +1423,8 @@ class RaceManagerWindow(QWidget):
                 except Exception as e:
                     log(f"[RaceWindow] control_pit_lane_open() error: {e}")
 
-            # Dopo Resume mantieni il salvataggio posizione attivo.
-            self._pos_timer.start()
+            # VB: posTimer.Stop()   (sì, nel VB è Stop qui)
+            self._pos_timer.stop()
 
             # VB: Broadcast GREEN
             self.device_man.broadcast(DeviceCommand.GREEN_FLAG_CMD.value)
@@ -2139,9 +1436,6 @@ class RaceManagerWindow(QWidget):
             self.live_man.send_session_info(self.race_man)
             if self.session_race_list:
                 self.live_man.send_race_data(self.session_race_list.drivers)
-
-        self._mark_recovery_dirty()
-        self._checkpoint_now("session-state-change", force=True)
     
     # ------------------------------------------------------------
     # RESET TO IMPLEMENT BETTER
@@ -2169,7 +1463,6 @@ class RaceManagerWindow(QWidget):
         self._refresh_flag_buttons_ui()
         self._refresh_sc_time_label()
         self.pit_open_val = 0
-        self._disable_pit_override(resync_auto=False)
         self.old_cmd = DeviceCommand.CLC_CMD.value
         self.pre_race_active = False
         self.old_pre_cmd = DeviceCommand.PRE_RACE_CMD.value
@@ -2212,12 +1505,12 @@ class RaceManagerWindow(QWidget):
         self.refs.start_btn.setText("Start")
         self.refs.timer_value.setText(self._format_mmss(max_sec))
         self.refs.session_value.setText(rm.get_session_name())
-        self._set_pit_label_text("Pit Closed")
+        self.refs.pit_label.setText("Pit Closed")
         self.refs.session_box.setEnabled(True)
         self.refs.racelist_box.setEnabled(True)
         self.refs.start_btn.setEnabled(list_reloaded)
         self.refs.reset_btn.setEnabled(list_reloaded)
-        self.refs.save_results_btn.setEnabled(list_reloaded)
+        self.refs.save_results_btn.setEnabled(True)
         self.refs.analytics_btn.setEnabled(list_reloaded)
         self.refs.pre_race_btn.setEnabled(list_reloaded)
         self.refs.apply_status_btn.setEnabled(list_reloaded)
@@ -2240,9 +1533,6 @@ class RaceManagerWindow(QWidget):
         except Exception as e:
             log(f"[RaceWindow] RESET live sync error: {e}")
 
-        self._mark_recovery_dirty()
-        self._checkpoint_now("session-reset", force=True)
-
         log(f"Session RESET (list_reloaded={list_reloaded}, max_sec={max_sec})")
 
     # ------------------------------------------------------------
@@ -2254,7 +1544,6 @@ class RaceManagerWindow(QWidget):
             return
 
         rm = self.race_man
-        self._mark_recovery_dirty()
 
         # --- tempo residuo ---
         tleft = int(getattr(rm, "session_time", 0) or 0)
@@ -2324,7 +1613,7 @@ class RaceManagerWindow(QWidget):
                     self.refs.start_btn.setText("Avanti")
                     self.refs.session_box.setEnabled(True)
                     self.refs.racelist_box.setEnabled(True)
-                    self._set_pit_label_text("Pit Closed")
+                    self.refs.pit_label.setText("Pit Closed")
                 except Exception:
                     pass
 
@@ -2391,52 +1680,46 @@ class RaceManagerWindow(QWidget):
             #log(f"[RaceWindow] PIT tick -> ERROR reading pit_state: {e}")
             pit_state = 0
 
-        if bool(getattr(self, "pit_override_active", False)):
-            if int(getattr(self, "pit_override_state", -1)) == 1:
-                self._set_pit_label_text("Pit Open (Manual)")
-            elif int(getattr(self, "pit_override_state", -1)) == 0:
-                self._set_pit_label_text("Pit Closed (Manual)")
-        else:
-            if pit_state != 0:
-                try:
-                    is_valid = bool(rm.open_pit())
-                    #log(f"[RaceWindow] PIT open_pit() -> {is_valid}")
-                except Exception as e:
-                    log(f"[RaceWindow] PIT open_pit() ERROR: {e}")
-                    is_valid = False
+        if pit_state != 0:
+            try:
+                is_valid = bool(rm.open_pit())
+                #log(f"[RaceWindow] PIT open_pit() -> {is_valid}")
+            except Exception as e:
+                log(f"[RaceWindow] PIT open_pit() ERROR: {e}")
+                is_valid = False
 
-                if is_valid:
-                    self._set_pit_label_text("Pit VALID")
+            if is_valid:
+                self.refs.pit_label.setText("Pit VALID")
 
-                    if getattr(self, "pit_open_val", 0) != 2:
-                        #log("[RaceWindow] PIT -> sending VALID state to device")
-                        try:
-                            self.control_pit_lane_open()
-                        except Exception as e:
-                            log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
-                        self.pit_open_val = 2
-                    #else:
-                        #log("[RaceWindow] PIT already in VALID state, no command sent")
-
-                else:
-                    self._set_pit_label_text("Pit Open")
-
-                    if getattr(self, "pit_open_val", 0) != 1:
-                        #log("[RaceWindow] PIT -> sending OPEN state to device")
-                        try:
-                            self.control_pit_lane_open()
-                        except Exception as e:
-                            log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
-                        self.pit_open_val = 1
-                    #else:
-                        #log("[RaceWindow] PIT already in OPEN state, no command sent")
+                if getattr(self, "pit_open_val", 0) != 2:
+                    #log("[RaceWindow] PIT -> sending VALID state to device")
+                    try:
+                        self.control_pit_lane_open()
+                    except Exception as e:
+                        log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
+                    self.pit_open_val = 2
+                #else:
+                    #log("[RaceWindow] PIT already in VALID state, no command sent")
 
             else:
-                #log("[RaceWindow] PIT state = 0 (CLOSED) -> forcing device sync")
-                try:
-                    self.control_pit_lane_open()
-                except Exception as e:
-                    log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
+                self.refs.pit_label.setText("Pit Open")
+
+                if getattr(self, "pit_open_val", 0) != 1:
+                    #log("[RaceWindow] PIT -> sending OPEN state to device")
+                    try:
+                        self.control_pit_lane_open()
+                    except Exception as e:
+                        log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
+                    self.pit_open_val = 1
+                #else:
+                    #log("[RaceWindow] PIT already in OPEN state, no command sent")
+
+        else:
+            #log("[RaceWindow] PIT state = 0 (CLOSED) -> forcing device sync")
+            try:
+                self.control_pit_lane_open()
+            except Exception as e:
+                log(f"[RaceWindow] control_pit_lane_open ERROR: {e}")
                 
         # -------------------------
         # Flags / lights (se esiste)
@@ -2577,8 +1860,6 @@ class RaceManagerWindow(QWidget):
             self._pre_timer.stop()
             log("Pre-race END")
 
-        self._mark_recovery_dirty()
-
     def _pre_race_command(self, sec_left: int) -> str:
         if sec_left <= 60:
             return DeviceCommand.PRE1_CMD.value
@@ -2670,9 +1951,6 @@ class RaceManagerWindow(QWidget):
             except Exception as e:
                 log(f"[RaceWindow] Errore aggiornamento LiveTiming: {e}")
 
-        self._mark_recovery_dirty()
-        self._checkpoint_now("driver-status-change", force=True)
-
         ended = self.race_man.all_ended()
         log(f"[RaceWindow] all_ended()={ended} dopo cambio stato pilota (row={row})")
         # Se tutti i piloti sono ended (inclusi DNS/DNF/DSQ), aggiorna UI come a fine gara
@@ -2686,7 +1964,7 @@ class RaceManagerWindow(QWidget):
                 self.refs.start_btn.setText("Avanti")
                 self.refs.session_box.setEnabled(True)
                 self.refs.racelist_box.setEnabled(True)
-                self._set_pit_label_text("Pit Closed")
+                self.refs.pit_label.setText("Pit Closed")
             except Exception:
                 pass
 
@@ -2775,6 +2053,13 @@ class RaceManagerWindow(QWidget):
         self.refs.green_btn.setChecked(False)
         self.refs.green_btn.blockSignals(False)
         self._refresh_flag_buttons_ui()
+        
+        # Resync pit lane state after green flag timeout (unless manual override is active)
+        if not bool(getattr(self, "pit_override_active", False)):
+            try:
+                self.control_pit_lane_open()
+            except Exception as e:
+                log(f"[RaceWindow] PIT resync after green flag timeout ERROR: {e}")
 
     def _on_red_clicked(self) -> None:
         """
@@ -2857,14 +2142,8 @@ class RaceManagerWindow(QWidget):
 
     def _on_wet_clicked(self) -> None:
         if self.device_man:
-            if not self.wet_active:
-                self.wet_active = True
-                self.device_man.broadcast(DeviceCommand.WET_RACE_CMD.value)
-                log("FLAG Wet")
-            else:
-                self.wet_active = False
-                self.device_man.broadcast(DeviceCommand.DRY_CMD.value)
-                log("FLAG Wet -> OFF")
+            self.device_man.broadcast(DeviceCommand.WET_RACE_CMD.value)
+            log("FLAG Wet")
 
     def _on_formation_lap_clicked(self) -> None:
         if self.device_man:
@@ -2872,18 +2151,18 @@ class RaceManagerWindow(QWidget):
             log("Formation lap")
 
     def _on_open_pit_clicked(self) -> None:
-        if self.pit_override_active and self.pit_override_state == 1:
-            self._disable_pit_override(resync_auto=True)
-            return
-        self._enable_pit_override(1)
+        if self.device_man:
+            self.device_man.broadcast(DeviceCommand.PIT_OPEN_CMD.value)
+            self.refs.pit_label.setText("Pit Open")
+            log("Pit OPEN")
 
     def _on_close_pit_clicked(self) -> None:
-        if self.pit_override_active and self.pit_override_state == 0:
-            self._disable_pit_override(resync_auto=True)
-            return
-        self._enable_pit_override(0)
+        if self.device_man:
+            self.device_man.broadcast(DeviceCommand.PIT_CLOSER_CMD.value)
+            self.refs.pit_label.setText("Pit Closed")
+            log("Pit CLOSED")
 
-    def control_pit_lane_open(self, forced_pit_state: Optional[int] = None) -> None:
+    def control_pit_lane_open(self) -> None:
         """
         Porting VB ControlPitLaneOpen()
         """
@@ -2897,7 +2176,7 @@ class RaceManagerWindow(QWidget):
             # VB: Thread.Sleep(10)
             time.sleep(0.01)
 
-            pit_state = self.race_man.pit_state if forced_pit_state is None else int(forced_pit_state)
+            pit_state = self.race_man.pit_state
 
             if pit_state == 0:
                 self.device_man.broadcast(DeviceCommand.PIT_CLOSER_CMD)
@@ -3062,7 +2341,6 @@ class RaceManagerWindow(QWidget):
             pass
 
         dt_ms = int((perf_counter() - t0) * 1000)
-        self._mark_recovery_dirty()
         log(f"[RaceWindow] HandleTransponderPass took {dt_ms} ms (swap={swap}, idx={idx}, best_idx={best_idx})")
 
 
@@ -3130,8 +2408,6 @@ class RaceManagerWindow(QWidget):
         except Exception as e:
             log(f"[RaceWindow] Circuits load error for analytics dialog: {e}")
 
-        from UI.AnalyticsSetupDialog.analytics_setup_dialog import AnalyticsSetupDialog
-
         dlg = AnalyticsSetupDialog(
             initial_data=seed,
             circuits=circuits_payload,
@@ -3186,8 +2462,6 @@ class RaceManagerWindow(QWidget):
         self.race_man.session_race_list = self.session_race_list
 
         try:
-            from Classes.analytics_manager import AnalyticsManager
-
             analytics_manager = AnalyticsManager(race_man=self.race_man)
             analytics_xlsx = analytics_manager.generate_analytics_excel(
                 root_path=str(root_path),
@@ -3254,8 +2528,6 @@ class RaceManagerWindow(QWidget):
         penalized_list: Optional[RaceList] = None
         penalties_pdf: list = []
         if session_ended:
-            from UI.ResultPreviewWindow.result_preview_window import ResultPreviewWindow
-
             preview = ResultPreviewWindow(self.race_man, self.session_race_list, self)
             if preview.exec() != QDialog.Accepted:
                 log("[RaceWindow] Generate Result cancelled from preview")
@@ -3292,7 +2564,6 @@ class RaceManagerWindow(QWidget):
                 penalties=penalties_pdf if penalties_pdf else None,
             )
             log(f"[RaceWindow] Result PDF generated: {result_pdf}")
-            self._checkpoint_now("result-export", force=True, clean_close=True)
 
             try:
                 os.startfile(str(result_pdf))
@@ -3308,192 +2579,6 @@ class RaceManagerWindow(QWidget):
     # ------------------------------------------------------------
     # Utils
     # ------------------------------------------------------------
-    def _mark_recovery_dirty(self) -> None:
-        self._recovery_dirty = True
-
-    def _checkpoint_now(self, reason: str, *, force: bool = False, clean_close: bool = False) -> bool:
-        if not self._recovery_store:
-            return False
-        if not (self.race_man and self.session_race_list):
-            return False
-        if not (force or clean_close or self._recovery_dirty):
-            return False
-
-        list_id = int(self._last_loaded_list_id or self._selected_list_id() or 0)
-        saved = self._recovery_store.save_checkpoint(
-            race_man=self.race_man,
-            race_list=self.session_race_list,
-            list_id=list_id,
-            reason=reason,
-            clean_close=clean_close,
-        )
-        if saved:
-            self._recovery_dirty = False
-        return saved
-
-    def _on_recovery_tick(self) -> None:
-        if not (self.race_man and self.session_race_list):
-            return
-        self._checkpoint_now("periodic-5s")
-
-    def _try_restore_after_load(self, list_id: int) -> None:
-        if not self._recovery_store:
-            return
-        if not (self.race_man and self.session_race_list):
-            return
-
-        payload = self._recovery_store.load_latest_recoverable(max_age_hours=24)
-        if not payload:
-            self.refs.recovery_btn.setEnabled(False)
-            return
-
-        try:
-            checkpoint_list_id = int(payload.get("listId", 0) or 0)
-        except Exception:
-            checkpoint_list_id = 0
-
-        if checkpoint_list_id > 0 and checkpoint_list_id != int(list_id):
-            self.refs.recovery_btn.setEnabled(False)
-            return
-
-        # Salva il payload e attiva il pulsante per il ripristino manuale
-        self._recovery_payload = payload
-        self.refs.recovery_btn.setEnabled(True)
-        updated_at = str(payload.get("updatedAt", "n/d"))
-        log(f"[RaceWindow] Recovery checkpoint found: {updated_at} (waiting for user action)")
-
-    def _on_recovery_clicked(self) -> None:
-        """Mostra il dialog per il ripristino della sessione."""
-        if not self._recovery_payload:
-            return
-
-        payload = self._recovery_payload
-        updated_at = str(payload.get("updatedAt", "n/d"))
-        
-        # Estrai dettagli dal payload
-        session_data = payload.get("session", {}) or {}
-        session_type = int(session_data.get("sessionType", 0) or 0)
-        session_time = int(payload.get("raceManager", {}).get("sessionTime", 0) or 0)
-        drivers = payload.get("drivers", []) or []
-        
-        # Nomi sessioni
-        session_names = ["Free Practice", "Q - Group", "Q - Hyperpole", "R - Feature", "R - Sprint", "R - Endurance"]
-        session_name = session_names[session_type] if 0 <= session_type < len(session_names) else f"Session {session_type}"
-        
-        # Formatta tempo
-        minutes = session_time // 60
-        seconds = session_time % 60
-        time_str = f"{minutes}:{seconds:02d}"
-        
-        # Numero piloti
-        num_drivers = len(drivers)
-        
-        # Costruisci messaggio dettagliato
-        details = f"""Ripristino della sessione salvata il {updated_at}
-
-Tipo: {session_name}
-Tempo rimasto: {time_str}
-Piloti: {num_drivers}
-
-Vuoi procedere?"""
-        
-        answer = QMessageBox.question(
-            self,
-            "Ripristino sessione",
-            details,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if answer != QMessageBox.Yes:
-            self._checkpoint_now("restore-rejected", force=True, clean_close=True)
-            return
-
-        self._apply_recovery_payload(payload)
-
-    def _apply_recovery_payload(self, payload: Dict[str, Any]) -> None:
-        """Applica il payload di recovery alla UI e al RaceManager."""
-        if not (self.race_man and self.session_race_list):
-            return
-
-        if not self._recovery_store.apply_checkpoint(self.race_man, self.session_race_list, payload):
-            log("[RaceWindow] Recovery apply failed")
-            return
-
-        self.write_lap_timing(self.session_race_list)
-        self._apply_current_session_column_layout()
-        self.refs.session_value.setText(self.race_man.get_session_name())
-        self.refs.timer_value.setText(self._format_mmss(int(getattr(self.race_man, "session_time", 0) or 0)))
-
-        pit_state = int(getattr(self.race_man, "pit_state", 0) or 0)
-        if pit_state == 2:
-            self._set_pit_label_text("Pit VALID")
-        elif pit_state == 1:
-            self._set_pit_label_text("Pit Open")
-        else:
-            self._set_pit_label_text("Pit Closed")
-
-        try:
-            status = SessionState(int(getattr(self.race_man, "session_status", SessionState.NotStarted)))
-        except Exception:
-            status = SessionState.NotStarted
-
-        # Dopo un restore da crash non ripartire automaticamente: richiedi Resume manuale.
-        if status == SessionState.Started:
-            try:
-                self.race_man.session_status = int(SessionState.Stopped)
-            except Exception:
-                pass
-            try:
-                self.race_man.session.session_status = int(SessionState.Stopped)
-            except Exception:
-                pass
-            status = SessionState.Stopped
-
-        self.refs.reset_btn.setEnabled(True)
-        self.refs.recovery_btn.setEnabled(False)
-        self.refs.save_results_btn.setEnabled(True)
-        self.refs.analytics_btn.setEnabled(True)
-        self.refs.pre_race_btn.setEnabled(True)
-        self.refs.apply_status_btn.setEnabled(True)
-
-        self._ses_timer.stop()
-        self._pos_timer.stop()
-        self._pre_timer.stop()
-
-        if status == SessionState.Started:
-            self.refs.start_btn.setText("Stop")
-            self.refs.session_box.setEnabled(False)
-            self.refs.racelist_box.setEnabled(False)
-            self.refs.load_btn.setEnabled(False)
-            self._ses_timer.start()
-            self._pos_timer.start()
-        elif status == SessionState.Stopped:
-            self.refs.start_btn.setText("Resume")
-            self.refs.session_box.setEnabled(False)
-            self.refs.racelist_box.setEnabled(False)
-            self.refs.load_btn.setEnabled(False)
-        elif status == SessionState.Finished:
-            self.refs.start_btn.setText("Avanti")
-            self.refs.session_box.setEnabled(True)
-            self.refs.racelist_box.setEnabled(True)
-            self.refs.load_btn.setEnabled(self.refs.racelist_box.count() > 0)
-        else:
-            self.refs.start_btn.setText("Start")
-            self.refs.session_box.setEnabled(True)
-            self.refs.racelist_box.setEnabled(True)
-            self.refs.load_btn.setEnabled(self.refs.racelist_box.count() > 0)
-
-        self.pre_race_active = int(getattr(getattr(self.race_man, "session", None), "pre_race_time", 0) or 0) > 0
-        if self.pre_race_active and status == SessionState.Started:
-            self._pre_timer.start()
-
-        if self.live_man and self.live_man.enabled:
-            self.live_man.send_session_info(self.race_man)
-            self.live_man.send_race_data(self.session_race_list.drivers)
-
-        updated_at = str(payload.get("updatedAt", "n/d"))
-        log(f"[RaceWindow] Recovery applied from checkpoint {updated_at}")
-
     
     def _format_mmss(self, sec: int) -> str:
         if sec < 0:
@@ -3521,31 +2606,31 @@ Vuoi procedere?"""
         This keeps the UI thread responsive during window closing, avoiding
         hangs if sockets block.
         """
-        self._shutdown_devices_sync(reason="threaded")
+        if not self.device_man:
+            return
+        try:
+            if self.device_man.conn_type == ConnectionTypes.TCP:
+                try:
+                    self.device_man.broadcast(DeviceCommand.DSCN_CMD.value)
+                    log("DeviceManager: broadcast DSCN_CMD before shutdown (threaded)")
+                except Exception as exc:
+                    log(f"[RaceWindow] async broadcast DSCN_CMD error: {exc}")
+        except Exception:
+            # ignore if device_man mutated concurrently
+            pass
+
+        try:
+            self.device_man.disconnect_all()
+            log("DeviceManager disconnected (threaded)")
+        except Exception as exc:
+            log(f"[RaceWindow] async DeviceManager disconnect error: {exc}")
 
     def closeEvent(self, event) -> None:
         log("RaceManagerWindow closing...")
-        self._is_closing = True
 
         self._ses_timer.stop()
         self._pos_timer.stop()
         self._pre_timer.stop()
-        self._recovery_timer.stop()
-
-        if self._startup_timer:
-            self._startup_timer.stop()
-            self._startup_timer = None
-
-        if self._racepanel_status_timer:
-            self._racepanel_status_timer.stop()
-
-        if self._device_overlay_hide_timer:
-            self._device_overlay_hide_timer.stop()
-
-        try:
-            self._checkpoint_now("window-close", force=True, clean_close=True)
-        except Exception as ex:
-            log(f"[RaceWindow] clean-close checkpoint error: {ex}")
 
         try:
             if self.live_man:

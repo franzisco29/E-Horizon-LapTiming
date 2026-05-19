@@ -57,8 +57,9 @@ class TimingConfig:
 
 @dataclass
 class DevicesConfig:
-    connection_type: int = 0   # 0 NONE, 1 TCP, 2 LAPMONITOR, 3 WIFIUDP
+    connection_type: int = 0   # 0 NONE, 1 TCP, 2 LAPMONITOR, 3 SERIAL
     tcp_port: int = 20777
+    ble_mac_address: str = ""  # MAC address dispositivo BLE LapMonitor, es. "70:B3:D5:4B:E2:95"
     device_available: str = "1,0,0,0,0,0"  # stringa come VB
 
     def device_available_flags(self, expected_len: int = 6) -> List[bool]:
@@ -72,6 +73,12 @@ class DevicesConfig:
 
     def set_device_available_flags(self, flags: List[bool]) -> None:
         self.device_available = ",".join("1" if x else "0" for x in flags)
+
+
+@dataclass
+class HeartbeatConfig:
+    interval_s: int = 5
+    max_missed: int = 3
 
 
 @dataclass
@@ -102,6 +109,7 @@ class Settings:
     paths: PathsConfig = field(default_factory=PathsConfig)
     timing: TimingConfig = field(default_factory=TimingConfig)
     devices: DevicesConfig = field(default_factory=DevicesConfig)
+    heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
     starting: StartingConfig = field(default_factory=StartingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
@@ -172,12 +180,39 @@ class Settings:
         self.validate_and_fix()
 
     @property
+    def ble_mac_address(self) -> str:
+        return self.devices.ble_mac_address
+
+    @ble_mac_address.setter
+    def ble_mac_address(self, value: str) -> None:
+        self.devices.ble_mac_address = str(value)
+        self.validate_and_fix()
+
+    @property
     def device_available(self) -> str:
         return self.devices.device_available
 
     @device_available.setter
     def device_available(self, value: str) -> None:
         self.devices.device_available = str(value)
+        self.validate_and_fix()
+
+    @property
+    def heartbeat_interval_s(self) -> int:
+        return self.heartbeat.interval_s
+
+    @heartbeat_interval_s.setter
+    def heartbeat_interval_s(self, value: int) -> None:
+        self.heartbeat.interval_s = int(value)
+        self.validate_and_fix()
+
+    @property
+    def heartbeat_max_missed(self) -> int:
+        return self.heartbeat.max_missed
+
+    @heartbeat_max_missed.setter
+    def heartbeat_max_missed(self, value: int) -> None:
+        self.heartbeat.max_missed = int(value)
         self.validate_and_fix()
 
     @property
@@ -258,6 +293,7 @@ class Settings:
             # paths.root_path verrà impostato al primo avvio su <base>/Settings
             timing=TimingConfig(debounce_ms=3000),
             devices=DevicesConfig(connection_type=0, tcp_port=20777, device_available="1,0,0,0,0,0"),
+            heartbeat=HeartbeatConfig(interval_s=5, max_missed=3),
             live=LiveConfig(timing_enabled=True, tv_enabled=False, public_enabled=False, ip="127.0.0.1", port=8888),
             starting=StartingConfig(manual_start=True),
             ui=UIConfig(monitor_out=0),
@@ -290,7 +326,12 @@ class Settings:
 
         cfg.devices.connection_type = int(data.get("devices", {}).get("connection_type", cfg.devices.connection_type))
         cfg.devices.tcp_port = int(data.get("devices", {}).get("tcp_port", cfg.devices.tcp_port))
+        cfg.devices.ble_mac_address = str(data.get("devices", {}).get("ble_mac_address", cfg.devices.ble_mac_address))
         cfg.devices.device_available = str(data.get("devices", {}).get("device_available", cfg.devices.device_available))
+
+        heartbeat_section = data.get("heartbeat", {}) or {}
+        cfg.heartbeat.interval_s = int(heartbeat_section.get("interval_s", heartbeat_section.get("seconds", cfg.heartbeat.interval_s)))
+        cfg.heartbeat.max_missed = int(heartbeat_section.get("max_missed", heartbeat_section.get("missed", cfg.heartbeat.max_missed)))
 
         # compatibility: support several possible key names for the new flags
         live_section = data.get("live", {}) or {}
@@ -341,6 +382,10 @@ class Settings:
                 "tcp_port": self.devices.tcp_port,
                 "device_available": self.devices.device_available,
             },
+            "heartbeat": {
+                "interval_s": self.heartbeat.interval_s,
+                "max_missed": self.heartbeat.max_missed,
+            },
             "live": {
                 "timing_enabled": self.live.timing_enabled,
                 "tv_enabled": self.live.tv_enabled,
@@ -370,6 +415,11 @@ class Settings:
 
         self.devices.tcp_port = _clamp_port(self.devices.tcp_port)
         self.live.port = _clamp_port(self.live.port)
+
+        if self.heartbeat.interval_s <= 0:
+            self.heartbeat.interval_s = 5
+        if self.heartbeat.max_missed < 1:
+            self.heartbeat.max_missed = 1
 
         if self.devices.connection_type not in (0, 1, 2, 3):
             self.devices.connection_type = 0

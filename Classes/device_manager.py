@@ -7,19 +7,24 @@ import threading
 import time
 from datetime import datetime
 from enum import IntEnum
-from typing import Callable, Dict, List, Optional, Sequence, Union
+from typing import Callable, Dict, List, Optional, Sequence, Union, TYPE_CHECKING
 
 from Classes.device import Device
 from Modules.device_commands import DeviceCommand
 from Modules.log_utils import log  # logger tuo
 from PySide6.QtCore import QObject, Signal
 
+try:
+    from lap_monitor import LapMonitor
+except ImportError:
+    LapMonitor = None  # type: ignore
+
 
 class ConnectionTypes(IntEnum):
     NONE = 0
     TCP = 1
     LAPMONITOR = 2
-    WIFIUDP = 3
+    SERIAL = 3
 
 
 class DeviceManager(QObject):
@@ -121,15 +126,37 @@ class DeviceManager(QObject):
         active_flags: Optional[Sequence[bool]] = None,
         debug_log: bool = False,
         handshake_delay_ms: int = 250,
+        heartbeat_interval_s: Optional[float] = None,
+        heartbeat_timeout_s: Optional[float] = None,
+        heartbeat_max_missed: Optional[int] = None,
         # debug: timeouts per evitare blocchi "muti"; None -> no timeout
         accept_timeout_s: Optional[float] = None,
         client_socket_timeout_s: Optional[float] = None,
+        ble_mac_address: str = "",
+        ble_min_lap_s: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.ip = ip
         self.port = port
         self.conn_type = ConnectionTypes(int(conn_type))
         self.debug_log = bool(debug_log)
+
+        # Override heartbeat tuning (per-instance). Methods read these via self.*.
+        if heartbeat_interval_s is not None:
+            try:
+                self._HEARTBEAT_INTERVAL_S = max(0.1, float(heartbeat_interval_s))
+            except Exception:
+                pass
+        if heartbeat_timeout_s is not None:
+            try:
+                self._HEARTBEAT_TIMEOUT_S = max(0.1, float(heartbeat_timeout_s))
+            except Exception:
+                pass
+        if heartbeat_max_missed is not None:
+            try:
+                self._HEARTBEAT_MAX_MISSED = max(1, int(heartbeat_max_missed))
+            except Exception:
+                pass
 
         # flags: se ne arrivano meno di MAX_DEVICES, le mancanti diventano False
         if active_flags is None:
@@ -153,6 +180,11 @@ class DeviceManager(QObject):
         self._heartbeat_stop_evt: threading.Event = threading.Event()
         self._is_running: bool = False
 
+        # BLE gateway (LAPMONITOR mode)
+        self._ble_monitor: Optional[object] = None  # type: LapMonitor
+        self._ble_connected: bool = False
+        self._ble_mac_address: str = ""
+
         # callbacks
         self.on_transponder_received: Optional[Callable[[str, int], None]] = None
         self.on_transponder_received_index: Optional[Callable[[int, int], None]] = None  # NEW
@@ -166,6 +198,31 @@ class DeviceManager(QObject):
         self._accept_timeout_s = None if accept_timeout_s is None else float(accept_timeout_s)
         self._client_socket_timeout_s = None if client_socket_timeout_s is None else float(client_socket_timeout_s)
 
+        # Istanziazione BLE gateway per LAPMONITOR
+        self._ble_mac_address = str(ble_mac_address).strip()
+        if ble_min_lap_s is None:
+            self._ble_min_lap_s = 5.0
+        else:
+            try:
+                self._ble_min_lap_s = max(0.0, float(ble_min_lap_s))
+            except Exception:
+                self._ble_min_lap_s = 5.0
+        if self.conn_type == ConnectionTypes.LAPMONITOR and self._ble_mac_address:
+            if LapMonitor is None:
+                self._log("INIT", "WARN: LapMonitor non disponibile (Bleak non installato)")
+            else:
+                try:
+                    self._ble_monitor = LapMonitor(
+                        address=self._ble_mac_address,
+                        min_lap_s=self._ble_min_lap_s,
+                        debug=self.debug_log
+                    )
+                    self._ble_monitor.on_lap = self._on_ble_lap
+                    self._ble_monitor.on_status = self._on_ble_status
+                    self._log("INIT", f"LapMonitor BLE gateway creato per {self._ble_mac_address} (min_lap_s={self._ble_min_lap_s:.3f})")
+                except Exception as ex:
+                    self._log("INIT", f"ERRORE: non è stato possibile creare LapMonitor: {ex}")
+
         self._log("INIT", f"DeviceManager creato — ip={ip} port={port} conn_type={self.conn_type.name}")
         self._log("INIT", f"MAX_DEVICES={self.MAX_DEVICES} DEVICE_NAMES={list(self.DEVICE_NAMES)}")
         self._log("INIT", f"active_flags={self.active_flags}")
@@ -174,7 +231,7 @@ class DeviceManager(QObject):
         self._log("INIT", f"heartbeat interval={self._HEARTBEAT_INTERVAL_S}s timeout={self._HEARTBEAT_TIMEOUT_S}s max_missed={self._HEARTBEAT_MAX_MISSED}")
         self._log("INIT", f"accept_timeout_s={self._accept_timeout_s} client_socket_timeout_s={self._client_socket_timeout_s} (None = nessun timeout)")
 
-        if self.conn_type == ConnectionTypes.TCP:
+        if self.conn_type in (ConnectionTypes.TCP, ConnectionTypes.LAPMONITOR):
             self.start()
 
     # -------------------------
@@ -191,6 +248,17 @@ class DeviceManager(QObject):
         if self._is_running:
             self._log("START", "Server già in esecuzione")
             return
+
+        # Avvia BLE monitor se LAPMONITOR
+        if self.conn_type == ConnectionTypes.LAPMONITOR:
+            if self._ble_monitor:
+                try:
+                    self._ble_monitor.start()
+                    self._log("START", "BLE monitor avviato")
+                except Exception as ex:
+                    self._log("START", f"ERRORE avvio BLE monitor: {ex}")
+            else:
+                self._log("START", "WARN: BLE monitor non disponibile")
 
         try:
             self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -225,6 +293,14 @@ class DeviceManager(QObject):
 
         self._is_running = False
         self._stop_heartbeat_loop()
+
+        # Ferma BLE monitor se LAPMONITOR
+        if self.conn_type == ConnectionTypes.LAPMONITOR and self._ble_monitor:
+            try:
+                self._ble_monitor.stop()
+                self._log("STOP", "BLE monitor fermato")
+            except Exception as ex:
+                self._log("STOP", f"Errore fermo BLE monitor: {ex}")
 
         with self._lock:
             self._log("STOP", f"Chiusura di {len(self._devices)} dispositivo/i")
@@ -447,7 +523,18 @@ class DeviceManager(QObject):
         self._log("HEARTBEAT", "Heartbeat loop avviato")
 
         while self._is_running and not self._heartbeat_stop_evt.is_set():
-            if self._heartbeat_stop_evt.wait(self._HEARTBEAT_INTERVAL_S):
+            wait_s = self._HEARTBEAT_INTERVAL_S
+            with self._lock:
+                deadlines = [
+                    dev.heartbeat_deadline_monotonic
+                    for dev in self._devices.values()
+                    if dev.heartbeat_waiting and dev.heartbeat_deadline_monotonic is not None
+                ]
+            if deadlines:
+                earliest_deadline = min(deadlines)
+                wait_s = max(0.0, min(wait_s, earliest_deadline - time.monotonic()))
+
+            if self._heartbeat_stop_evt.wait(wait_s):
                 break
 
             now = time.monotonic()
@@ -465,7 +552,14 @@ class DeviceManager(QObject):
                             f"{dev_id}: heartbeat mancato ({dev.heartbeat_missed_count}/{self._HEARTBEAT_MAX_MISSED})",
                         )
                         if dev.heartbeat_missed_count >= self._HEARTBEAT_MAX_MISSED:
-                            to_disconnect.append((dev_id, "timeout heartbeat (3 mancati consecutivi)"))
+                            reason = f"timeout heartbeat ({self._HEARTBEAT_MAX_MISSED} mancati consecutivi)"
+                            to_disconnect.append((dev_id, reason))
+                            # Notify UI immediately (while still holding lock)
+                            if self.on_device_disconnected:
+                                try:
+                                    self.on_device_disconnected(dev_id, reason)
+                                except Exception as ex:
+                                    self._log("CALLBACK", f"Errore callback on_device_disconnected (immediate): {ex}")
                             continue
 
                     if not dev.heartbeat_waiting:
@@ -489,12 +583,14 @@ class DeviceManager(QObject):
         if dev is None:
             return False
 
+        device_label = self._device_label(device_id)
+        
         try:
             dev.close()
         except Exception as ex:
-            self._log("DISCONNECT", f"{device_id}: errore chiusura socket: {ex}")
+            self._log("DISCONNECT", f"{device_label}: errore chiusura socket: {ex}")
 
-        self._log("DISCONNECT", f"{device_id}: disconnesso ({reason})")
+        self._log("DISCONNECT", f"{device_label}: disconnesso ({reason})")
 
         if emit_alert and self.on_device_disconnected:
             try:
@@ -672,6 +768,35 @@ class DeviceManager(QObject):
                 self._last_required_devices_connected_state = state
             return True
 
+        # LAPMONITOR: richiede BLE connesso + D5/D8 se abilitati
+        if self.conn_type == ConnectionTypes.LAPMONITOR:
+            if not self._ble_connected:
+                state = (False, "BLE offline")
+                if self._last_required_devices_connected_state != state:
+                    self._last_required_devices_connected_state = state
+                    self._log("CHECK", f"all_required_devices_connected → False (BLE offline)")
+                return False
+            
+            # Controlla D5 e D8 se necessari
+            missing: Optional[str] = None
+            with self._lock:
+                # D5 (Sem, index 5)
+                if self.active_flags[5]:
+                    if f"D5" not in self._devices:
+                        missing = "D5 (Semaforo)"
+                # D8 (RacePanel, index 8) - sempre richiesto se abilitato
+                if self.active_flags[8]:
+                    if f"D8" not in self._devices:
+                        missing = "D8 (Race Panel)"
+            
+            ok = missing is None
+            state = (ok, missing)
+            if self._last_required_devices_connected_state != state:
+                self._last_required_devices_connected_state = state
+                self._log("CHECK", f"all_required_devices_connected (LAPMONITOR) → {ok} (BLE OK, mancante={missing})")
+            return ok
+
+        # TCP/SERIAL: controlla tutti i device richiesti
         missing: Optional[str] = None
         with self._lock:
             for i, required in enumerate(self.active_flags):
@@ -701,6 +826,17 @@ class DeviceManager(QObject):
         self._log("PARSER", f"_extract_device_id_and_ip: payload='{payload}' → ({device_id}, {ip})")
         return device_id, ip
 
+    def _device_label(self, device_id: str) -> str:
+        try:
+            match = re.fullmatch(r"D(\d+)", str(device_id).strip())
+            if match:
+                index = int(match.group(1))
+                if 0 <= index < len(self.DEVICE_NAMES):
+                    return self.DEVICE_NAMES[index]
+        except Exception:
+            pass
+        return str(device_id)
+
     # -------------------------
     # Logging
     # -------------------------
@@ -725,6 +861,7 @@ class DeviceManager(QObject):
         Restituisce una lista dello stato dei device:
         - Connesso (ONLINE) se il device ha completato l'handshake
         - Non connesso (OFFLINE) se ancora non collegato
+        In LAPMONITOR: D0 via BLE, D1-D4 disabilitati, D5/D8 via TCP opzionali
         Compatibile con l'uso in _startup_win.update_status()
         """
         with self._lock:
@@ -733,7 +870,29 @@ class DeviceManager(QObject):
                 dev_id = f"D{i}"
                 always_accepted = i in self._ALWAYS_ACCEPTED_IDS
                 active = always_accepted or (i < len(self.active_flags) and self.active_flags[i])
-                if not active:
+                
+                # LAPMONITOR mode: gestione specifica
+                if self.conn_type == ConnectionTypes.LAPMONITOR:
+                    if i == 0:  # Central (D0) → BLE LapMonitor
+                        if self._ble_connected:
+                            status_list.append(f"Device ID {i} - {name} - Connesso via BLE (LapMonitor)")
+                        else:
+                            status_list.append(f"Device ID {i} - {name} - BLE offline (LapMonitor)")
+                    elif i in [1, 2, 3, 4]:  # D1-D4 disabilitati
+                        status_list.append(f"Device ID {i} - {name} - Non usato in LAPMONITOR")
+                    elif i in [5, 8] and active:  # D5 (Sem), D8 (RacePanel) se abilitati
+                        if dev_id in self._devices:
+                            ip = self._devices[dev_id].ip
+                            status_list.append(f"Device ID {i} - {name} - Connesso da IP {ip}")
+                        else:
+                            status_list.append(f"Device ID {i} - {name} - In attesa di connessione (opzionale)...")
+                    elif i in [5, 8]:
+                        status_list.append(f"Device ID {i} - {name} - Non attivato dall'utente")
+                    else:  # D6, D7
+                        status_list.append(f"Device ID {i} - {name} - Non usato in LAPMONITOR")
+                
+                # TCP/SERIAL/NONE mode: logica standard
+                elif not active:
                     status_list.append(f"Device ID {i} - {name} - Non attivato dall'utente")
                 elif dev_id in self._devices:
                     ip = self._devices[dev_id].ip
@@ -743,3 +902,33 @@ class DeviceManager(QObject):
                 else:
                     status_list.append(f"Device ID {i} - {name} - In attesa di connessione...")
             return status_list
+
+    # -------------------------
+    # BLE Gateway Callbacks (LAPMONITOR)
+    # -------------------------
+    def _on_ble_lap(self, car_id: int) -> None:
+        """Callback da LapMonitor quando riceve un transponder via BLE."""
+        self._log("BLE", f"Transponder ricevuto via BLE: car_id={car_id}")
+        # Invia al device D0 (Central)
+        if self.on_transponder_received_index:
+            try:
+                self.on_transponder_received_index(0, int(car_id))
+            except Exception as ex:
+                self._log("BLE", f"Errore callback on_transponder_received_index: {ex}")
+    
+    def _on_ble_status(self, connected: bool) -> None:
+        """Callback da LapMonitor quando cambia lo stato della connessione BLE."""
+        self._ble_connected = bool(connected)
+        self._log("BLE", f"Stato BLE: {'CONNESSO' if connected else 'DISCONNESSO'}")
+        
+        # Notifica cambio stato device list
+        if self.on_devices_changed:
+            try:
+                self.on_devices_changed()
+            except Exception as ex:
+                self._log("BLE", f"Errore callback on_devices_changed: {ex}")
+        
+        try:
+            self.devicesChanged.emit()
+        except Exception:
+            pass

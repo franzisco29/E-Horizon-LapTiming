@@ -65,6 +65,8 @@ class SettingsWindow(QDialog):
         r.tv_tower_check.setChecked(bool(self.settings.tv_enabled))
         r.live_public_check.setChecked(bool(getattr(self.settings, "live_public_enabled", False)))
         r.manual_start_check.setChecked(bool(getattr(self.settings, "manual_start", True)))
+        r.heartbeat_interval_edit.setText(str(int(getattr(self.settings, "heartbeat_interval_s", 5))))
+        r.heartbeat_max_missed_edit.setText(str(int(getattr(self.settings, "heartbeat_max_missed", 3))))
 
         # Monitor list
         r.monitor_combo.clear()
@@ -110,6 +112,8 @@ class SettingsWindow(QDialog):
             r.conn_type_combo.setEnabled(False)
             r.debounce_edit.setEnabled(False)
             r.manual_start_check.setEnabled(False)
+            r.heartbeat_interval_edit.setEnabled(False)
+            r.heartbeat_max_missed_edit.setEnabled(False)
             r.root_path_edit.setEnabled(False)
             r.browse_btn.setEnabled(False)
             r.tv_tower_check.setEnabled(False)
@@ -136,17 +140,32 @@ class SettingsWindow(QDialog):
     def _conn_type_changed(self) -> None:
         r = self.ui.refs
         admin = int(self.settings.admin)
+        conn_index = r.conn_type_combo.currentIndex()
 
-        is_tcp = r.conn_type_combo.currentIndex() == 1 and admin != 0
+        is_tcp = conn_index == 1 and admin != 0
+        is_lapmonitor = conn_index == 2
 
-        # I dispositivi devono restare selezionabili anche quando la connessione e NONE/SERIAL/WIFIUDP.
-        can_edit_devices = admin != 0
-        for cb in r.dev_checks:
-            cb.setEnabled(can_edit_devices)
+        # In LAPMONITOR, disabilita D1-D4 (indici 1-4 nei checkbox)
+        for i, cb in enumerate(r.dev_checks):
+            if i in [1, 2, 3, 4]:  # D1, D2, D3, D4
+                cb.setEnabled(not is_lapmonitor and admin != 0)
+                if is_lapmonitor:
+                    cb.setChecked(False)
+            else:
+                cb.setEnabled(admin != 0)
 
         r.tcp_port_edit.setEnabled(is_tcp)
         r.tcp_port_edit.setToolTip(
             "" if is_tcp else "Abilita 'Comunicazione: TCP' per modificare la porta TCP."
+        )
+
+        r.heartbeat_interval_edit.setEnabled(is_tcp)
+        r.heartbeat_interval_edit.setToolTip(
+            "" if is_tcp else "Abilita 'Comunicazione: TCP' per modificare l'intervallo heartbeat."
+        )
+        r.heartbeat_max_missed_edit.setEnabled(is_tcp)
+        r.heartbeat_max_missed_edit.setToolTip(
+            "" if is_tcp else "Abilita 'Comunicazione: TCP' per modificare i heartbeat mancati massimi."
         )
 
     def _refresh_summary(self) -> None:
@@ -155,8 +174,8 @@ class SettingsWindow(QDialog):
         conn_map = {
             0: "NONE",
             1: "TCP",
-            2: "SERIAL",
-            3: "WIFIUDP",
+            2: "LAPMONITOR",
+            3: "SERIAL",
         }
 
         conn_mode = conn_map.get(int(r.conn_type_combo.currentIndex()), "UNKNOWN")
@@ -218,6 +237,18 @@ class SettingsWindow(QDialog):
             QMessageBox.warning(self, "Valore non valido", "LIVE Port deve essere un numero.")
             return
 
+        try:
+            heartbeat_interval = int(r.heartbeat_interval_edit.text().strip())
+        except Exception:
+            QMessageBox.warning(self, "Valore non valido", "Intervallo heartbeat deve essere un numero.")
+            return
+
+        try:
+            heartbeat_missed = int(r.heartbeat_max_missed_edit.text().strip())
+        except Exception:
+            QMessageBox.warning(self, "Valore non valido", "Heartbeat mancati massimi deve essere un numero.")
+            return
+
         # ---- write to settings
         self.settings.debug = bool(r.debug_check.isChecked())
         self.settings.live_enabled = bool(r.live_check.isChecked())
@@ -226,6 +257,8 @@ class SettingsWindow(QDialog):
         self.settings.manual_start = bool(r.manual_start_check.isChecked())
         self.settings.tcp_port = tcp_port
         self.settings.monitor_out = int(r.monitor_combo.currentIndex())
+        self.settings.heartbeat_interval_s = heartbeat_interval
+        self.settings.heartbeat_max_missed = heartbeat_missed
 
         flags = [cb.isChecked() for cb in r.dev_checks]
         self.settings.devices.set_device_available_flags(flags)
