@@ -571,28 +571,20 @@ class RaceManagerWindow(QWidget):
         self._set_live_badge("OFF", "#9aa4b2", "rgba(255,255,255,0.06)")
 
         if self.settings.live_enabled:
-            live_ip = self.settings.live_ip
             live_port = self.settings.live_port
-            live_public_enabled = bool(getattr(self.settings, "live_public_enabled", False))
 
             self.live_man = LiveTimingManager(
-                live_ip,
+                "0.0.0.0",
                 live_port,
                 root_path=self.settings.root_path,
-                public_enabled=live_public_enabled,
             )
-            self.live_man.on_public_online = self.sig_live_public_online.emit
             self.live_man.start()
 
-            # Aggiorna la label di stato live (iniziale)
-            if live_public_enabled:
-                self._set_live_badge("AVVIO...", "#f6c453", "rgba(246,196,83,0.14)")
-            else:
-                self._set_live_badge("LOCALE", "#8ab4f8", "rgba(138,180,248,0.14)")
+            self._set_live_badge("LOCALE", "#8ab4f8", "rgba(138,180,248,0.14)")
 
             log(
-                f"[RaceWindow] LiveTiming started on {live_ip}:{live_port} "
-                f"(WEB same port, public={'on' if live_public_enabled else 'off'})"
+                f"[RaceWindow] LiveTiming started on 0.0.0.0:{live_port} "
+                f"(reverse proxy esterno sulla porta configurata)"
             )
         else:
             log("[RaceWindow] LiveTiming disabled by settings")

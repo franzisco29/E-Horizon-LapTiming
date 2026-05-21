@@ -66,7 +66,6 @@ class SettingsWindowUIRefs:
     heartbeat_max_missed_edit: QLineEdit
     live_ip_edit: QLineEdit
     live_port_edit: QLineEdit
-    live_public_check: QCheckBox
     live_box: QWidget
     starting_box: QWidget
     tcp_box: QWidget
@@ -391,7 +390,6 @@ class SettingsWindowUI(QWidget):
             dev_checks,
             live_ip_edit,
             live_port_edit,
-            live_public_check,
             live_box,
             root_path_edit,
             browse_btn,
@@ -415,7 +413,6 @@ class SettingsWindowUI(QWidget):
             heartbeat_max_missed_edit=heartbeat_max_missed_edit,
             live_ip_edit=live_ip_edit,
             live_port_edit=live_port_edit,
-            live_public_check=live_public_check,
             live_box=live_box,
             starting_box=starting_box,
             tcp_box=tcp_card,
@@ -637,14 +634,10 @@ class SettingsWindowUI(QWidget):
         live_port_edit.setPlaceholderText("es. 8080")
         self._field_row(live_grid, 1, "Porta server live", live_port_edit)
         live_layout.addLayout(live_grid)
-        live_layout.addWidget(_divider())
-        live_public_check = QCheckBox("Tunnel pubblico via ngrok")
-        live_layout.addWidget(live_public_check)
-        live_layout.addWidget(_hint_label("Richiede ngrok configurato e autenticato. Consente l’accesso esterno alla pagina live dal browser."))
         vbox.addWidget(live_box)
         vbox.addStretch(1)
         self._stack.addWidget(page)
-        return live_check, tv_check, live_ip_edit, live_port_edit, live_public_check, live_box
+        return live_check, tv_check, live_ip_edit, live_port_edit, live_box
 
     def _build_page_cartelle(self):
         page, vbox = self._make_page("Cartelle", "Percorso radice per sessioni, classifiche e database")
@@ -686,7 +679,7 @@ class SettingsWindowUI(QWidget):
         conn_type_combo, debounce_edit, tcp_ip_value_label, tcp_port_edit, tcp_card = self._build_page_comunicazione()
         heartbeat_interval_edit, heartbeat_max_missed_edit = self._build_page_heartbeat()
         dev_checks = self._build_page_dispositivi()
-        live_check, tv_check, live_ip_edit, live_port_edit, live_public_check, live_box = self._build_page_live()
+        live_check, tv_check, live_ip_edit, live_port_edit, live_box = self._build_page_live()
         root_path_edit, browse_btn, starting_box = self._build_page_cartelle()
 
         return (
@@ -705,7 +698,6 @@ class SettingsWindowUI(QWidget):
             dev_checks,
             live_ip_edit,
             live_port_edit,
-            live_public_check,
             live_box,
             root_path_edit,
             browse_btn,

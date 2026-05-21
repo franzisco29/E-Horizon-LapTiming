@@ -14,8 +14,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-import ngrok
-
 from Modules.log_utils import log
 from Modules.paths import get_app_base_dir
 
@@ -29,16 +27,15 @@ EVENT_COLOR_MAP: Dict[str, str] = {
     "pitout": "#00C853",
 }
 
-# Public tunnel settings.
-PUBLIC_TUNNEL_DOMAIN = "alphonso-supersacerdotal-tomboyishly.ngrok-free.dev"
-PUBLIC_TUNNEL_AUTHTOKEN = "3AqYa5ynYWEYmf0T5uQ7mKDO2AN_2bBmFGAcFEkaMfGF7sBRj"
-
 
 @dataclass
 class LiveTimingManager:
     """
-    Hub Live Timing con server principale unico:
-    - DATA + WEB server (REST + WS + pagina): host:port
+        Hub Live Timing con server principale unico.
+
+        Il server espone REST, WebSocket e pagina web sul bind interno 0.0.0.0.
+        In produzione l'esposizione esterna va fatta tramite reverse proxy (es. Nginx)
+        sulla porta configurata.
 
     Mantiene API compatibili con il codice esistente:
       - send_session_info(...)
@@ -49,7 +46,6 @@ class LiveTimingManager:
     address: str
     port: int
     root_path: Optional[str] = None
-    public_enabled: bool = True
 
     enabled: bool = False
 
@@ -66,9 +62,6 @@ class LiveTimingManager:
     _thread: Optional[threading.Thread] = None
     _loop: Optional[asyncio.AbstractEventLoop] = None
     _ready_evt: threading.Event = field(default_factory=threading.Event)
-    _ngrok_listener: Optional[Any] = None
-
-    on_public_online: Optional[Callable[[], None]] = None  # callback per segnalare online
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -247,22 +240,16 @@ class LiveTimingManager:
     async def _start_async(self) -> None:
         self.app_data = self.build_app_data()
         self._server_data = uvicorn.Server(
-            uvicorn.Config(self.app_data, host=self.address, port=self.port, log_level="warning")
+            uvicorn.Config(self.app_data, host="0.0.0.0", port=self.port, log_level="warning")
         )
         try:
-            log(f"[LIVE] Server avviato su http://{self.address}:{self.port}")
+            log(f"[LIVE] Server avviato su http://0.0.0.0:{self.port} (reverse proxy esterno sulla porta configurata)")
         except Exception:
             pass
         self.enabled = True
         self._server_task = asyncio.create_task(self._server_data.serve())
-        self._start_public_tunnel()
 
     async def _stop_async(self) -> None:
-        # Disconnetti ngrok prima di fermare uvicorn: evita errori
-        # "error connecting to upstream" causati da richieste in arrivo
-        # mentre il server locale è già spento.
-        self._stop_public_tunnel()
-
         if self._server_data:
             self._server_data.should_exit = True
             task = self._server_task
@@ -271,55 +258,6 @@ class LiveTimingManager:
                     await asyncio.wait_for(task, timeout=5.0)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
-
-    # ------------------------------------------------------------------
-    # ngrok tunnel management — Python SDK
-    # ------------------------------------------------------------------
-
-    def _start_public_tunnel(self) -> None:
-        if not self.public_enabled:
-            return
-
-        if self._ngrok_listener is not None:
-            return
-
-        def ngrok_thread() -> None:
-            try:
-                listener = ngrok.forward(
-                    f"localhost:{self.port}",
-                    authtoken=PUBLIC_TUNNEL_AUTHTOKEN,
-                    domain=PUBLIC_TUNNEL_DOMAIN,
-                )
-                self._ngrok_listener = listener
-                log(f"[LIVE] Tunnel ngrok attivo → {listener.url()}")
-                if self.on_public_online:
-                    try:
-                        self.on_public_online()
-                    finally:
-                        self.on_public_online = None
-            except Exception as ex:
-                log(f"[LIVE] Errore avvio tunnel ngrok: {ex}", level="ERROR")
-
-        threading.Thread(target=ngrok_thread, name="NgrokStartThread", daemon=True).start()
-
-    def _stop_public_tunnel(self) -> None:
-        listener = self._ngrok_listener
-        self._ngrok_listener = None
-        if listener is None:
-            return
-        url = None
-        try:
-            url = listener.url()
-        except Exception:
-            pass
-        try:
-            # disconnect() è sincrono; listener.close() è Awaitable e richiederebbe await.
-            # kill() termina completamente la sessione agent (evita retry interni del SDK).
-            ngrok.disconnect(url)
-            ngrok.kill()
-            log("[LIVE] Tunnel ngrok chiuso")
-        except Exception as ex:
-            log(f"[LIVE] Errore chiusura tunnel ngrok: {ex}", level="WARN")
 
     # ------------------------------------------------------------------
     # Public API

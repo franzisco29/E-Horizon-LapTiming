@@ -85,7 +85,6 @@ class HeartbeatConfig:
 class LiveConfig:
     timing_enabled: bool = True
     tv_enabled: bool = False
-    public_enabled: bool = False
     ip: str = "127.0.0.1"
     port: int = 8888
 
@@ -294,7 +293,7 @@ class Settings:
             timing=TimingConfig(debounce_ms=3000),
             devices=DevicesConfig(connection_type=0, tcp_port=20777, device_available="1,0,0,0,0,0"),
             heartbeat=HeartbeatConfig(interval_s=5, max_missed=3),
-            live=LiveConfig(timing_enabled=True, tv_enabled=False, public_enabled=False, ip="127.0.0.1", port=8888),
+            live=LiveConfig(timing_enabled=True, tv_enabled=False, ip="127.0.0.1", port=8888),
             starting=StartingConfig(manual_start=True),
             ui=UIConfig(monitor_out=0),
         )
@@ -341,9 +340,6 @@ class Settings:
         cfg.live.tv_enabled = bool(
             live_section.get("tv_enabled", live_section.get("tv_Enabled", cfg.live.tv_enabled))
         )
-        cfg.live.public_enabled = bool(
-            live_section.get("public_enabled", live_section.get("ngrok_public_enabled", cfg.live.public_enabled))
-        )
         cfg.live.ip = str(data.get("live", {}).get("ip", cfg.live.ip))
         cfg.live.port = int(data.get("live", {}).get("port", cfg.live.port))
 
@@ -389,7 +385,6 @@ class Settings:
             "live": {
                 "timing_enabled": self.live.timing_enabled,
                 "tv_enabled": self.live.tv_enabled,
-                "public_enabled": self.live.public_enabled,
                 "ip": self.live.ip,
                 "port": self.live.port,
             },
